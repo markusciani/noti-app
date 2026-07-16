@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "216078229933",
+    "project_id": "noti-android-1527",
+    "storage_bucket": "noti-android-1527.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:216078229933:android:1c8c5f311e476e6ef6c124",
+        "android_client_info": {
+          "package_name": "org.ciani01.noti"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBp6NER9bp4-igOSDz-XkGaluUw82qOBTA"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

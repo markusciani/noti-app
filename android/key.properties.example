@@ -1,0 +1,4 @@
+storePassword=choose-a-long-unique-password
+keyPassword=choose-a-long-unique-password
+keyAlias=noti-release
+storeFile=../noti-release.jks
