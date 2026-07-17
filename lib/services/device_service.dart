@@ -306,6 +306,11 @@ class DeviceService {
     final existing = await ref.get();
     final existingData = existing.data() ?? const <String, dynamic>{};
     final existingStatus = existingData['joinStatus'] as String?;
+    // Director tablets are trusted for member-feed access immediately. Their
+    // protected tools still require device authentication and staff role checks.
+    final joinStatus = registration.deviceType == 'director_tablet'
+        ? 'approved'
+        : (existingStatus ?? 'pending');
     await ref.set({
       ...platformData,
       'id': deviceId,
@@ -316,7 +321,7 @@ class DeviceService {
       'isDisabled': false,
       'organizationId': registration.organizationId,
       'organizationName': registration.organizationName,
-      'joinStatus': existingStatus ?? 'pending',
+      'joinStatus': joinStatus,
       'deviceType': registration.deviceType,
       'displayName': displayName,
       'deviceName': displayName,
@@ -338,13 +343,15 @@ class DeviceService {
     await _ensureDeviceOwner();
     final ref = _firestore.collection(_collection).doc(deviceId);
     final existing = await ref.get();
-    final deviceNumber = (existing.data()?['deviceNumber'] as String? ?? '')
-        .trim();
+    final existingData = existing.data() ?? const <String, dynamic>{};
+    final deviceNumber = (existingData['deviceNumber'] as String? ?? '').trim();
+    final isDirectorTablet = existingData['deviceType'] == 'director_tablet';
     await ref.set({
       ...platformData,
       'id': deviceId,
       'lastSeenAt': FieldValue.serverTimestamp(),
       if (deviceNumber.isNotEmpty) 'displayName': 'Maranatha $deviceNumber',
+      if (isDirectorTablet) 'joinStatus': 'approved',
     }, SetOptions(merge: true));
   }
 
