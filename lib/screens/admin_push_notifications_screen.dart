@@ -1,12 +1,16 @@
+import 'dart:async';
+
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/material.dart';
 
-import '../services/auth_service.dart';
+import '../models/custom_notification_delivery.dart';
 import '../services/push_notification_service.dart';
 import '../widgets/adaptive_page_body.dart';
 
 class AdminPushNotificationsScreen extends StatefulWidget {
-  const AdminPushNotificationsScreen({super.key});
+  const AdminPushNotificationsScreen({super.key, this.organizationId});
+
+  final String? organizationId;
 
   @override
   State<AdminPushNotificationsScreen> createState() =>
@@ -16,73 +20,122 @@ class AdminPushNotificationsScreen extends StatefulWidget {
 class _AdminPushNotificationsScreenState
     extends State<AdminPushNotificationsScreen> {
   final _formKey = GlobalKey<FormState>();
-  final _titleController = TextEditingController(text: 'Noti test alert');
-  final _messageController = TextEditingController(
-    text: 'This is a test notification from Noti Admin.',
-  );
-  final _authService = AuthService();
+  final _titleController = TextEditingController();
+  final _messageController = TextEditingController();
   final _pushService = PushNotificationService();
+  Timer? _clock;
   bool _sending = false;
+  CustomNotificationDelivery? _editing;
+
+  @override
+  void initState() {
+    super.initState();
+    _clock = Timer.periodic(const Duration(seconds: 15), (_) {
+      if (mounted) setState(() {});
+    });
+  }
 
   @override
   void dispose() {
+    _clock?.cancel();
     _titleController.dispose();
     _messageController.dispose();
     super.dispose();
   }
 
-  Future<bool> _confirmPin() async {
-    final result = await showDialog<bool>(
-      context: context,
-      builder: (_) => _PinConfirmationDialog(onVerify: _authService.verifyPin),
-    );
-    return result == true;
-  }
-
-  Future<void> _sendBroadcast() async {
+  Future<void> _sendOrSave() async {
     if (!_formKey.currentState!.validate()) return;
-    if (!await _confirmPin()) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Broadcast cancelled or PIN incorrect.'),
-          ),
-        );
-      }
-      return;
-    }
-
+    final isEditing = _editing != null;
+    if (!mounted) return;
     setState(() => _sending = true);
     try {
-      await _pushService.sendTestBroadcast(
-        title: _titleController.text.trim(),
-        message: _messageController.text.trim(),
-      );
+      if (isEditing) {
+        await _pushService.updateBroadcast(
+          notificationId: _editing!.id,
+          title: _titleController.text.trim(),
+          message: _messageController.text.trim(),
+          organizationId: widget.organizationId,
+        );
+      } else {
+        await _pushService.createBroadcast(
+          title: _titleController.text.trim(),
+          message: _messageController.text.trim(),
+          organizationId: widget.organizationId,
+        );
+      }
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Test notification sent to all devices.')),
-      );
-    } on FirebaseFunctionsException catch (error) {
-      if (!mounted) return;
+      setState(() {
+        _editing = null;
+        _titleController.clear();
+        _messageController.clear();
+      });
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(error.message ?? 'Could not send notification.'),
+          content: Text(
+            isEditing
+                ? 'Corrected broadcast sent to every tablet.'
+                : 'Broadcast sent to every tablet.',
+          ),
         ),
       );
-    } catch (_) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Could not send notification.')),
+    } on FirebaseFunctionsException catch (error) {
+      _showError(error.message ?? 'Could not send this broadcast.');
+    } on Object catch (_) {
+      _showError(
+        'Could not send this broadcast. Check your connection and try again.',
       );
     } finally {
       if (mounted) setState(() => _sending = false);
     }
   }
 
+  Future<void> _deleteBroadcast(CustomNotificationDelivery delivery) async {
+    if (!mounted) return;
+    try {
+      await _pushService.withdrawBroadcast(
+        delivery.id,
+        organizationId: widget.organizationId,
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Notification deleted.')));
+    } on FirebaseFunctionsException catch (error) {
+      _showError(error.message ?? 'Could not delete this broadcast.');
+    } on Object catch (_) {
+      _showError('Could not delete this broadcast.');
+    }
+  }
+
+  void _beginEditing(CustomNotificationDelivery delivery) {
+    setState(() {
+      _editing = delivery;
+      _titleController.text = delivery.title;
+      _messageController.text = delivery.message;
+    });
+  }
+
+  void _cancelEditing() {
+    setState(() {
+      _editing = null;
+      _titleController.clear();
+      _messageController.clear();
+    });
+  }
+
+  void _showError(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
+  }
+
   @override
   Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    final isEditing = _editing != null;
     return Scaffold(
-      appBar: AppBar(title: const Text('Push Notifications')),
+      appBar: AppBar(title: const Text('Push notifications')),
       body: SafeArea(
         child: AdaptivePageBody(
           maxWidth: 680,
@@ -97,15 +150,16 @@ class _AdminPushNotificationsScreenState
                     child: Row(
                       children: [
                         CircleAvatar(
-                          child: Icon(
-                            Icons.notifications_active_rounded,
-                            color: Theme.of(context).colorScheme.onPrimary,
-                          ),
+                          backgroundColor: colors.primaryContainer,
+                          foregroundColor: colors.primary,
+                          child: const Icon(Icons.notifications_active_rounded),
                         ),
                         const SizedBox(width: 12),
-                        const Expanded(
+                        Expanded(
                           child: Text(
-                            'Send a test broadcast to every device subscribed to Noti announcements.',
+                            isEditing
+                                ? 'Correct this broadcast before the five-minute window ends.'
+                                : 'Send a custom broadcast to every tablet subscribed to Noti.',
                           ),
                         ),
                       ],
@@ -113,6 +167,13 @@ class _AdminPushNotificationsScreenState
                   ),
                 ),
                 const SizedBox(height: 20),
+                Text(
+                  isEditing ? 'Edit broadcast' : 'New broadcast',
+                  style: Theme.of(
+                    context,
+                  ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
+                ),
+                const SizedBox(height: 12),
                 TextFormField(
                   controller: _titleController,
                   maxLength: 80,
@@ -138,21 +199,72 @@ class _AdminPushNotificationsScreenState
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  'A PIN is required before this is sent. Tapping the notification keeps members on the Noti home feed.',
-                  style: Theme.of(context).textTheme.bodySmall,
+                  'For five minutes, this screen can edit or delete your broadcast. Devices already offline may still show the original system alert until they reconnect.',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: colors.onSurfaceVariant,
+                  ),
                 ),
-                const SizedBox(height: 20),
+                const SizedBox(height: 16),
                 FilledButton.icon(
-                  onPressed: _sending ? null : _sendBroadcast,
+                  onPressed: _sending ? null : _sendOrSave,
                   icon: _sending
                       ? const SizedBox(
                           height: 18,
                           width: 18,
                           child: CircularProgressIndicator(strokeWidth: 2),
                         )
-                      : const Icon(Icons.send_rounded),
-                  label: const Text('Send test broadcast'),
+                      : Icon(
+                          isEditing ? Icons.save_rounded : Icons.send_rounded,
+                        ),
+                  label: Text(isEditing ? 'Save correction' : 'Send broadcast'),
                 ),
+                if (isEditing)
+                  TextButton(
+                    onPressed: _cancelEditing,
+                    child: const Text('Cancel editing'),
+                  ),
+                const SizedBox(height: 28),
+                Text(
+                  'Recent broadcasts',
+                  style: Theme.of(
+                    context,
+                  ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
+                ),
+                const SizedBox(height: 8),
+                StreamBuilder<List<CustomNotificationDelivery>>(
+                  stream: _pushService.watchMyBroadcasts(),
+                  builder: (context, snapshot) {
+                    if (snapshot.hasError) {
+                      return const _BroadcastInfo(
+                        'Recent broadcasts are unavailable right now.',
+                      );
+                    }
+                    final deliveries =
+                        snapshot.data ?? const <CustomNotificationDelivery>[];
+                    if (deliveries.isEmpty) {
+                      return const _BroadcastInfo(
+                        'No custom broadcasts have been sent from this account yet.',
+                      );
+                    }
+                    return Column(
+                      children: [
+                        for (final delivery in deliveries) ...[
+                          _BroadcastCard(
+                            delivery: delivery,
+                            onEdit: delivery.canCorrect
+                                ? () => _beginEditing(delivery)
+                                : null,
+                            onDelete: delivery.canCorrect
+                                ? () => _deleteBroadcast(delivery)
+                                : null,
+                          ),
+                          const SizedBox(height: 10),
+                        ],
+                      ],
+                    );
+                  },
+                ),
+                const SizedBox(height: 24),
               ],
             ),
           ),
@@ -162,82 +274,82 @@ class _AdminPushNotificationsScreenState
   }
 }
 
-class _PinConfirmationDialog extends StatefulWidget {
-  const _PinConfirmationDialog({required this.onVerify});
+class _BroadcastCard extends StatelessWidget {
+  const _BroadcastCard({
+    required this.delivery,
+    required this.onEdit,
+    required this.onDelete,
+  });
 
-  final Future<bool> Function(String pin) onVerify;
-
-  @override
-  State<_PinConfirmationDialog> createState() => _PinConfirmationDialogState();
-}
-
-class _PinConfirmationDialogState extends State<_PinConfirmationDialog> {
-  final _controller = TextEditingController();
-  bool _verifying = false;
-  String? _error;
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  Future<void> _verify() async {
-    final pin = _controller.text.trim();
-    if (pin.isEmpty) {
-      setState(() => _error = 'Enter your admin PIN.');
-      return;
-    }
-
-    setState(() {
-      _verifying = true;
-      _error = null;
-    });
-    try {
-      final valid = await widget.onVerify(pin);
-      if (!mounted) return;
-      if (valid) {
-        Navigator.of(context).pop(true);
-      } else {
-        setState(() => _error = 'Incorrect PIN. Please try again.');
-      }
-    } catch (_) {
-      if (mounted) {
-        setState(() => _error = 'Could not verify the PIN. Please try again.');
-      }
-    } finally {
-      if (mounted) setState(() => _verifying = false);
-    }
-  }
+  final CustomNotificationDelivery delivery;
+  final VoidCallback? onEdit;
+  final VoidCallback? onDelete;
 
   @override
   Widget build(BuildContext context) {
-    return AlertDialog(
-      title: const Text('Confirm broadcast'),
-      content: TextField(
-        controller: _controller,
-        autofocus: true,
-        obscureText: true,
-        keyboardType: TextInputType.number,
-        onSubmitted: (_) => _verifying ? null : _verify(),
-        decoration: InputDecoration(labelText: 'Admin PIN', errorText: _error),
+    final end = delivery.correctionWindowEndsAt;
+    final secondsLeft = end == null
+        ? 0
+        : end.difference(DateTime.now()).inSeconds.clamp(0, 300);
+    final label = delivery.canCorrect
+        ? 'Corrections available for ${secondsLeft ~/ 60}:${(secondsLeft % 60).toString().padLeft(2, '0')}'
+        : delivery.isActive
+        ? 'Correction window closed'
+        : 'Deleted';
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              delivery.title,
+              style: Theme.of(
+                context,
+              ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              delivery.message,
+              maxLines: 3,
+              overflow: TextOverflow.ellipsis,
+            ),
+            const SizedBox(height: 8),
+            Text(label, style: Theme.of(context).textTheme.bodySmall),
+            if (onEdit != null || onDelete != null) ...[
+              const SizedBox(height: 10),
+              Wrap(
+                spacing: 8,
+                children: [
+                  OutlinedButton.icon(
+                    onPressed: onEdit,
+                    icon: const Icon(Icons.edit_rounded),
+                    label: const Text('Edit'),
+                  ),
+                  OutlinedButton.icon(
+                    onPressed: onDelete,
+                    icon: const Icon(Icons.delete_outline_rounded),
+                    label: const Text('Delete notification'),
+                  ),
+                ],
+              ),
+            ],
+          ],
+        ),
       ),
-      actions: [
-        TextButton(
-          onPressed: _verifying ? null : () => Navigator.pop(context, false),
-          child: const Text('Cancel'),
-        ),
-        FilledButton(
-          onPressed: _verifying ? null : _verify,
-          child: _verifying
-              ? const SizedBox(
-                  height: 18,
-                  width: 18,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                )
-              : const Text('Send'),
-        ),
-      ],
+    );
+  }
+}
+
+class _BroadcastInfo extends StatelessWidget {
+  const _BroadcastInfo(this.message);
+
+  final String message;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: Padding(padding: const EdgeInsets.all(16), child: Text(message)),
     );
   }
 }

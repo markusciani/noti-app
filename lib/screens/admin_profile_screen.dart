@@ -1,5 +1,8 @@
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_storage/firebase_storage.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 
 import '../services/auth_service.dart';
 import '../widgets/adaptive_page_body.dart';
@@ -15,6 +18,7 @@ class AdminProfileScreen extends StatefulWidget {
 class _AdminProfileScreenState extends State<AdminProfileScreen> {
   late final TextEditingController _firstNameController;
   bool _saving = false;
+  bool _uploadingPhoto = false;
 
   @override
   void initState() {
@@ -35,6 +39,16 @@ class _AdminProfileScreenState extends State<AdminProfileScreen> {
     return trimmed.isEmpty ? '' : trimmed.split(RegExp(r'\s+')).first;
   }
 
+  String _profileInitial(User? user) {
+    final name = _firstName(user?.displayName);
+    if (name.isNotEmpty) return name[0].toUpperCase();
+
+    final email = user?.email?.trim() ?? '';
+    if (email.isNotEmpty) return email[0].toUpperCase();
+
+    return 'N';
+  }
+
   Future<void> _saveFirstName() async {
     final firstName = _firstNameController.text.trim();
     if (firstName.isEmpty || firstName.length > 40) {
@@ -51,22 +65,80 @@ class _AdminProfileScreenState extends State<AdminProfileScreen> {
 
     setState(() => _saving = true);
     try {
-      await user.updateDisplayName(firstName);
-      await user.reload();
+      await AuthService().updateDirectorProfile(firstName: firstName);
       if (!mounted) return;
       setState(() {});
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(const SnackBar(content: Text('First name saved.')));
-    } on FirebaseAuthException {
+    } on FirebaseFunctionsException catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Could not save your first name. Try again.'),
+        SnackBar(
+          content: Text(error.message ?? 'Could not save your first name.'),
         ),
+      );
+    } on Object catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not save your first name: $error')),
       );
     } finally {
       if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  Future<void> _changeProfilePhoto() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+    final firstName = _firstNameController.text.trim();
+    if (firstName.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Save your first name before adding a picture.'),
+        ),
+      );
+      return;
+    }
+    final image = await ImagePicker().pickImage(
+      source: ImageSource.gallery,
+      maxWidth: 512,
+      maxHeight: 512,
+      imageQuality: 82,
+    );
+    if (image == null) return;
+
+    setState(() => _uploadingPhoto = true);
+    try {
+      final bytes = await image.readAsBytes();
+      final ref = FirebaseStorage.instance.ref(
+        'profile_pictures/${user.uid}.jpg',
+      );
+      await ref.putData(bytes, SettableMetadata(contentType: 'image/jpeg'));
+      final photoUrl = await ref.getDownloadURL();
+      await AuthService().updateDirectorProfile(
+        firstName: firstName,
+        photoUrl: photoUrl,
+      );
+      if (!mounted) return;
+      setState(() {});
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Profile picture saved.')));
+    } on FirebaseFunctionsException catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(error.message ?? 'Could not save the profile picture.'),
+        ),
+      );
+    } on Object catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not save the profile picture: $error')),
+      );
+    } finally {
+      if (mounted) setState(() => _uploadingPhoto = false);
     }
   }
 
@@ -85,7 +157,7 @@ class _AdminProfileScreenState extends State<AdminProfileScreen> {
     final colors = Theme.of(context).colorScheme;
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Admin Profile')),
+      appBar: AppBar(title: const Text('Staff Profile')),
       body: AdaptivePageBody(
         maxWidth: 560,
         child: ListView(
@@ -97,17 +169,46 @@ class _AdminProfileScreenState extends State<AdminProfileScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    CircleAvatar(
-                      radius: 24,
-                      backgroundColor: colors.primaryContainer,
-                      foregroundColor: colors.primary,
-                      child: Text(
-                        (_firstName(user?.displayName).isNotEmpty
-                                ? _firstName(user?.displayName)
-                                : user?.email ?? 'A')[0]
-                            .toUpperCase(),
-                        style: const TextStyle(fontWeight: FontWeight.w800),
-                      ),
+                    Stack(
+                      clipBehavior: Clip.none,
+                      children: [
+                        CircleAvatar(
+                          radius: 34,
+                          backgroundColor: colors.primaryContainer,
+                          foregroundColor: colors.primary,
+                          backgroundImage: user?.photoURL?.isNotEmpty == true
+                              ? NetworkImage(user!.photoURL!)
+                              : null,
+                          child: user?.photoURL?.isNotEmpty == true
+                              ? null
+                              : Text(
+                                  _profileInitial(user),
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w800,
+                                    fontSize: 22,
+                                  ),
+                                ),
+                        ),
+                        Positioned(
+                          right: -8,
+                          bottom: -4,
+                          child: IconButton.filledTonal(
+                            tooltip: 'Change profile picture',
+                            onPressed: _uploadingPhoto
+                                ? null
+                                : _changeProfilePhoto,
+                            icon: _uploadingPhoto
+                                ? const SizedBox(
+                                    width: 16,
+                                    height: 16,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                    ),
+                                  )
+                                : const Icon(Icons.photo_camera_outlined),
+                          ),
+                        ),
+                      ],
                     ),
                     const SizedBox(height: 16),
                     Text(
@@ -120,7 +221,7 @@ class _AdminProfileScreenState extends State<AdminProfileScreen> {
                     Text(
                       user?.displayName?.isNotEmpty == true
                           ? user!.displayName!
-                          : 'Firebase authenticated administrator',
+                          : 'Firebase authenticated staff member',
                       style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                         color: colors.onSurfaceVariant,
                       ),

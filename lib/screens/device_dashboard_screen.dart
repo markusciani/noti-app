@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 
 import '../models/registered_device.dart';
 import '../services/device_service.dart';
+import '../services/organization_service.dart';
 import '../widgets/adaptive_page_body.dart';
 
 class DeviceDashboardScreen extends StatelessWidget {
@@ -24,9 +25,82 @@ class DeviceDashboardScreen extends StatelessWidget {
         date.day == now.day;
   }
 
+  Future<void> _renameDevice(
+    BuildContext context,
+    RegisteredDevice device,
+    OrganizationService organizationService,
+  ) async {
+    final numberController = TextEditingController(text: device.deviceNumber);
+    var deviceType = device.deviceType;
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Rename device'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              DropdownButtonFormField<String>(
+                initialValue: _deviceTypes.containsKey(deviceType)
+                    ? deviceType
+                    : 'other',
+                decoration: const InputDecoration(labelText: 'Device type'),
+                items: _deviceTypes.entries
+                    .map(
+                      (entry) => DropdownMenuItem(
+                        value: entry.key,
+                        child: Text(entry.value),
+                      ),
+                    )
+                    .toList(),
+                onChanged: (value) {
+                  if (value != null) setDialogState(() => deviceType = value);
+                },
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: numberController,
+                maxLength: 40,
+                decoration: const InputDecoration(
+                  labelText: 'Device number',
+                  hintText: 'For example, 30',
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(dialogContext, true),
+              child: const Text('Save'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (result != true || numberController.text.trim().isEmpty) {
+      numberController.dispose();
+      return;
+    }
+    try {
+      await organizationService.updateDeviceProfile(
+        deviceId: device.id,
+        deviceType: deviceType,
+        displayName: 'Maranatha ${numberController.text.trim()}',
+        deviceNumber: numberController.text,
+      );
+    } finally {
+      numberController.dispose();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final deviceService = DeviceService();
+    final organizationService = OrganizationService();
     final colors = Theme.of(context).colorScheme;
 
     return Scaffold(
@@ -170,6 +244,15 @@ class DeviceDashboardScreen extends StatelessWidget {
                           onDelete: () async {
                             await deviceService.deleteDevice(device.id);
                           },
+                          onApprove: device.joinStatus == 'pending'
+                              ? () =>
+                                    organizationService.approveDevice(device.id)
+                              : null,
+                          onRename: () => _renameDevice(
+                            context,
+                            device,
+                            organizationService,
+                          ),
                         ),
                       ),
                     ),
@@ -183,6 +266,14 @@ class DeviceDashboardScreen extends StatelessWidget {
     );
   }
 }
+
+const _deviceTypes = <String, String>{
+  'tablet': 'Tablet',
+  'phone': 'Phone',
+  'director_tablet': 'Director tablet',
+  'computer': 'Computer',
+  'other': 'Other',
+};
 
 class _MetricCard extends StatelessWidget {
   const _MetricCard({
@@ -246,12 +337,16 @@ class _DeviceTile extends StatelessWidget {
     required this.relativeTime,
     required this.onDisableToggle,
     required this.onDelete,
+    required this.onApprove,
+    required this.onRename,
   });
 
   final RegisteredDevice device;
   final String relativeTime;
   final VoidCallback onDisableToggle;
   final VoidCallback onDelete;
+  final VoidCallback? onApprove;
+  final VoidCallback onRename;
 
   @override
   Widget build(BuildContext context) {
@@ -263,7 +358,7 @@ class _DeviceTile extends StatelessWidget {
         tilePadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
         childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
         title: Text(
-          device.deviceName,
+          device.displayName,
           style: Theme.of(
             context,
           ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
@@ -281,6 +376,43 @@ class _DeviceTile extends StatelessWidget {
           color: colors.onSurfaceVariant,
         ),
         children: [
+          if (!device.notificationsEnabled)
+            Card(
+              color: colors.errorContainer,
+              child: ListTile(
+                dense: true,
+                leading: Icon(
+                  Icons.notifications_off_rounded,
+                  color: colors.error,
+                ),
+                title: const Text('Notifications are disabled'),
+                subtitle: const Text(
+                  'Ask someone to enable Noti notifications in Android Settings.',
+                ),
+              ),
+            ),
+          _DetailRow(
+            label: 'Organization',
+            value: device.organizationName.isEmpty
+                ? device.organizationId
+                : device.organizationName,
+          ),
+          _DetailRow(label: 'Join status', value: device.joinStatus),
+          _DetailRow(
+            label: 'Staff access requested',
+            value: device.staffAccessRequested ? 'Yes' : 'No',
+          ),
+          _DetailRow(
+            label: 'Type',
+            value: _deviceTypes[device.deviceType] ?? device.deviceType,
+          ),
+          _DetailRow(label: 'Device ID', value: device.id),
+          if (device.firstName.isNotEmpty)
+            _DetailRow(label: 'First name', value: device.firstName),
+          if (device.lastName.isNotEmpty)
+            _DetailRow(label: 'Last name', value: device.lastName),
+          if (device.deviceNumber.isNotEmpty)
+            _DetailRow(label: 'Device number', value: device.deviceNumber),
           _DetailRow(
             label: 'Status',
             value: device.isDisabled ? 'Disabled' : 'Enabled',
@@ -299,8 +431,23 @@ class _DeviceTile extends StatelessWidget {
                 : device.minimumSupportedVersion,
           ),
           const SizedBox(height: 12),
-          Row(
+          Wrap(
+            spacing: 10,
+            runSpacing: 10,
             children: [
+              if (onApprove != null) ...[
+                FilledButton.icon(
+                  onPressed: onApprove,
+                  icon: const Icon(Icons.how_to_reg_rounded),
+                  label: const Text('Approve'),
+                ),
+              ],
+              OutlinedButton.icon(
+                onPressed: onRename,
+                icon: const Icon(Icons.edit_rounded),
+                label: const Text('Rename'),
+              ),
+              const SizedBox(width: 10),
               FilledButton.tonal(
                 onPressed: onDisableToggle,
                 child: Text(

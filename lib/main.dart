@@ -5,15 +5,18 @@ import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'firebase_options.dart';
 import 'services/app_settings_service.dart';
+import 'services/director_widget_service.dart';
 import 'services/notification_service.dart';
 import 'services/splash_theme_service.dart';
 import 'screens/home_screen.dart';
+import 'screens/director_widget_entry_screen.dart';
 import 'theme/noti_theme.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+  await NotificationService().showBackgroundMessage(message);
 }
 
 void main() async {
@@ -36,8 +39,10 @@ class NotiApp extends StatefulWidget {
 }
 
 class _NotiAppState extends State<NotiApp> {
+  final _navigatorKey = GlobalKey<NavigatorState>();
   final _splashThemeService = SplashThemeService();
   final _settingsService = AppSettingsService();
+  final _directorWidgetService = DirectorWidgetService();
   int? _cachedSplashColor;
   StreamSubscription? _settingsSubscription;
   NotiThemePreset _preset = NotiThemePreset.main;
@@ -51,6 +56,19 @@ class _NotiAppState extends State<NotiApp> {
       onError: (_) {
         // Keep the last known appearance when Firestore is temporarily offline.
       },
+    );
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _directorWidgetService.initialize(_openDirectorWidget).catchError((_) {
+        // The app remains usable if a device does not support home widgets.
+      });
+    });
+  }
+
+  void _openDirectorWidget() {
+    final navigator = _navigatorKey.currentState;
+    if (navigator == null) return;
+    navigator.push(
+      MaterialPageRoute(builder: (_) => const DirectorWidgetEntryScreen()),
     );
   }
 
@@ -66,6 +84,10 @@ class _NotiAppState extends State<NotiApp> {
     final appearance = NotiAppearance.fromStorage(
       data['appearanceMode'] as String?,
     );
+    _applyTheme(preset, appearance);
+  }
+
+  void _applyTheme(NotiThemePreset preset, NotiAppearance appearance) {
     if (preset == _preset && appearance == _appearance) return;
 
     final palette = NotiPalette.forPreset(preset, appearance: appearance);
@@ -94,6 +116,7 @@ class _NotiAppState extends State<NotiApp> {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
+      navigatorKey: _navigatorKey,
       debugShowCheckedModeBanner: false,
       title: 'Noti',
       // Keep MaterialApp's navigator and inherited widgets stable. Changing

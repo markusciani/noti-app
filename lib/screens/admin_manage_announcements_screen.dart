@@ -6,7 +6,9 @@ import '../widgets/adaptive_page_body.dart';
 import 'admin_create_announcement_screen.dart';
 
 class AdminManageAnnouncementsScreen extends StatelessWidget {
-  AdminManageAnnouncementsScreen({super.key});
+  AdminManageAnnouncementsScreen({super.key, this.organizationId});
+
+  final String? organizationId;
 
   final FirestoreService _firestoreService = FirestoreService();
 
@@ -44,7 +46,11 @@ class AdminManageAnnouncementsScreen extends StatelessWidget {
         false;
 
     if (confirmed != true) return;
-    await _firestoreService.deleteAnnouncement(announcement.id);
+    if (!context.mounted) return;
+    await _firestoreService.deleteAnnouncement(
+      announcement.id,
+      organizationId: organizationId ?? announcement.organizationId,
+    );
     if (!context.mounted) return;
     ScaffoldMessenger.of(
       context,
@@ -55,6 +61,14 @@ class AdminManageAnnouncementsScreen extends StatelessWidget {
     BuildContext context,
     Announcement announcement,
   ) async {
+    if (!announcement.canCorrect) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('The five-minute correction window has ended.'),
+        ),
+      );
+      return;
+    }
     final action = await showModalBottomSheet<String>(
       context: context,
       showDragHandle: true,
@@ -84,8 +98,10 @@ class AdminManageAnnouncementsScreen extends StatelessWidget {
     if (action == 'edit') {
       await Navigator.of(context).push(
         MaterialPageRoute(
-          builder: (_) =>
-              AdminCreateAnnouncementScreen(announcement: announcement),
+          builder: (_) => AdminCreateAnnouncementScreen(
+            announcement: announcement,
+            organizationId: organizationId ?? announcement.organizationId,
+          ),
         ),
       );
     } else if (action == 'delete') {
@@ -103,7 +119,8 @@ class AdminManageAnnouncementsScreen extends StatelessWidget {
         onPressed: () {
           Navigator.of(context).push(
             MaterialPageRoute(
-              builder: (_) => const AdminCreateAnnouncementScreen(),
+              builder: (_) =>
+                  AdminCreateAnnouncementScreen(organizationId: organizationId),
             ),
           );
         },
@@ -111,7 +128,9 @@ class AdminManageAnnouncementsScreen extends StatelessWidget {
         label: const Text('New'),
       ),
       body: StreamBuilder<List<Announcement>>(
-        stream: _firestoreService.getAnnouncements(),
+        stream: _firestoreService.getAnnouncements(
+          organizationId: organizationId,
+        ),
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting &&
               !snapshot.hasData) {
@@ -158,7 +177,9 @@ class AdminManageAnnouncementsScreen extends StatelessWidget {
                       overflow: TextOverflow.ellipsis,
                     ),
                     subtitle: Text(
-                      announcement.message,
+                      announcement.canCorrect
+                          ? '${announcement.message}\nEdit or delete available for five minutes.'
+                          : announcement.message,
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                     ),

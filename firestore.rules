@@ -8,18 +8,37 @@ service cloud.firestore {
 
     function isAdmin() {
       return isSignedIn()
+          && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+          && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'director'
+          && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.enabled != false;
+    }
+
+    function isDirector() {
+      return isSignedIn()
         && exists(/databases/$(database)/documents/users/$(request.auth.uid))
-        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'director'
         && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.enabled != false;
+    }
+
+    function isStaff() {
+      return isDirector();
+    }
+
+    function isOrganizationAdmin(organizationId) {
+      return isDirector();
+    }
+
+    function joinableOrganization(organizationId) {
+      return organizationId == 'maranatha-romanian-church'
+        || (
+          exists(/databases/$(database)/documents/organizations/$(organizationId))
+          && get(/databases/$(database)/documents/organizations/$(organizationId)).data.enabled != false
+        );
     }
 
     match /announcements/{announcementId} {
       allow read: if true;
-      allow create: if isAdmin()
-        && request.resource.data.createdByUid == request.auth.uid;
-      allow update: if isAdmin()
-        && request.resource.data.createdByUid == resource.data.createdByUid;
-      allow delete: if isAdmin();
+      allow create, update, delete: if false;
     }
 
     match /devices/{deviceId} {
@@ -28,13 +47,27 @@ service cloud.firestore {
       allow list: if isAdmin();
       allow create: if isSignedIn()
         && request.resource.data.ownerUid == request.auth.uid
-        && request.resource.data.isDisabled == false;
+        && request.resource.data.isDisabled == false
+        && request.resource.data.joinStatus == 'pending'
+        && joinableOrganization(request.resource.data.organizationId);
       allow update: if isAdmin()
         || (
           isSignedIn()
           && resource.data.ownerUid == request.auth.uid
           && request.resource.data.ownerUid == resource.data.ownerUid
           && request.resource.data.isDisabled == resource.data.isDisabled
+          && (
+            request.resource.data.organizationId == resource.data.organizationId
+            || resource.data.organizationId == null
+            || resource.data.joinStatus == 'rejected'
+          )
+          && (
+            request.resource.data.joinStatus == resource.data.joinStatus
+            || (
+              request.resource.data.joinStatus == 'pending'
+              && (resource.data.joinStatus == null || resource.data.joinStatus == 'rejected')
+            )
+          )
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
             'deviceName',
             'manufacturer',
@@ -48,9 +81,31 @@ service cloud.firestore {
             'isOutdated',
             'lastSeenAt',
             'id',
+            'organizationName',
+            'displayName',
+            'firstName',
+            'lastName',
+            'deviceNumber',
+            'deviceType',
+            'staffAccessRequested',
           ])
         );
       allow delete: if isAdmin();
+    }
+
+    match /organizations/{organizationId} {
+      allow read: if true;
+      allow create, update, delete: if isOrganizationAdmin(organizationId);
+
+      match /members/{userId} {
+        allow read: if isOrganizationAdmin(organizationId)
+          || (isSignedIn() && request.auth.uid == userId);
+        allow write: if isOrganizationAdmin(organizationId);
+      }
+
+      match /security/{securityId} {
+        allow read, write: if isOrganizationAdmin(organizationId);
+      }
     }
 
     match /settings/{settingId} {
@@ -63,6 +118,10 @@ service cloud.firestore {
       allow create, update, delete: if false;
     }
 
+    match /mail/{mailId} {
+      allow read, write: if false;
+    }
+
     match /users/{userId} {
       allow get: if isAdmin()
         || (isSignedIn() && request.auth.uid == userId);
@@ -70,9 +129,17 @@ service cloud.firestore {
       allow create, update, delete: if false;
     }
 
-    match /admin_pins/{userId} {
-      allow get, create, update, delete: if isAdmin()
-        && request.auth.uid == userId;
+    // Song deliveries are created, edited, and withdrawn through trusted
+    // Cloud Functions so the five-minute correction window is server-enforced.
+    match /song_deliveries/{deliveryId} {
+      allow get, list: if isStaff()
+        && (isAdmin() || resource.data.requestedByUid == request.auth.uid);
+      allow create, update, delete: if false;
+    }
+
+    match /custom_notifications/{notificationId} {
+      allow get, list: if isAdmin();
+      allow create, update, delete: if false;
     }
 
     match /{document=**} {

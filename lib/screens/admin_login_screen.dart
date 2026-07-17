@@ -1,7 +1,9 @@
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
 import '../services/auth_service.dart';
 import 'admin_dashboard_screen.dart';
+import 'founder_dashboard_screen.dart';
 
 class AdminLoginScreen extends StatefulWidget {
   const AdminLoginScreen({super.key});
@@ -37,7 +39,18 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
         email: _emailController.text.trim(),
         password: _passwordController.text,
       );
-      await _continueAsAdmin();
+      await _continueAsStaff();
+    } on FirebaseAuthException catch (e) {
+      final message = switch (e.code) {
+        'invalid-credential' ||
+        'user-not-found' ||
+        'wrong-password' => 'The email or password is incorrect.',
+        'invalid-email' => 'Enter a valid email address.',
+        'user-disabled' => 'This Firebase account is disabled.',
+        'too-many-requests' => 'Too many attempts. Try again later.',
+        _ => e.message ?? 'Could not sign in. Please try again.',
+      };
+      setState(() => _error = message);
     } on Object catch (e) {
       setState(() {
         _error = e.toString();
@@ -51,23 +64,25 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
     }
   }
 
-  Future<void> _continueAsAdmin() async {
-    final authorized = await _authService.isCurrentUserAdmin();
-    if (!authorized) {
+  Future<void> _continueAsStaff() async {
+    final role = await _authService.currentStaffRole();
+    if (role == StaffRole.none) {
       await _authService.signOut();
       throw StateError(
-        'This account signed in, but is not approved as a Noti administrator. '
-        'Add its Firebase UID to Firestore users/<uid> with role "admin" and enabled true.',
+        'This account signed in, but is not approved for Noti staff access. '
+        'Ask the founder to open Staff access and assign this Firebase account as an admin or director.',
       );
     }
 
-    final hasPin = await _authService.hasPin();
     if (!mounted) return;
     Navigator.of(context).pushReplacement(
       MaterialPageRoute(
-        builder: (_) => hasPin
-            ? const AdminDashboardScreen()
-            : const AdminDashboardScreen(firstRun: true),
+        builder: (_) => switch (role) {
+          StaffRole.founder => const FounderDashboardScreen(),
+          StaffRole.admin => const AdminDashboardScreen(),
+          StaffRole.director => const AdminDashboardScreen(),
+          StaffRole.none => const AdminDashboardScreen(),
+        },
       ),
     );
   }
@@ -87,14 +102,14 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Text(
-                    'Noti Admin',
+                    'Noti Staff',
                     style: Theme.of(context).textTheme.headlineMedium?.copyWith(
                       fontWeight: FontWeight.w800,
                     ),
                   ),
                   const SizedBox(height: 8),
                   Text(
-                    'Sign in with your church administrator email and password.',
+                    'Sign in with your church administrator or director email and password.',
                     textAlign: TextAlign.center,
                     style: Theme.of(context).textTheme.bodyMedium,
                   ),

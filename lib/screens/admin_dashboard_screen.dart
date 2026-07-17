@@ -9,12 +9,11 @@ import 'admin_profile_screen.dart';
 import 'admin_push_notifications_screen.dart';
 import 'admin_settings_screen.dart';
 import 'device_dashboard_screen.dart';
+import 'director_song_delivery_screen.dart';
 import '../widgets/adaptive_page_body.dart';
 
 class AdminDashboardScreen extends StatefulWidget {
-  const AdminDashboardScreen({super.key, this.firstRun = false});
-
-  final bool firstRun;
+  const AdminDashboardScreen({super.key});
 
   @override
   State<AdminDashboardScreen> createState() => _AdminDashboardScreenState();
@@ -22,103 +21,6 @@ class AdminDashboardScreen extends StatefulWidget {
 
 class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   final _authService = AuthService();
-  final _pinController = TextEditingController();
-  bool _pinSet = false;
-  bool _pinVerified = false;
-  bool _loadingPinState = true;
-  String? _pinLoadError;
-
-  @override
-  void initState() {
-    super.initState();
-    _loadPinState();
-  }
-
-  @override
-  void dispose() {
-    _pinController.dispose();
-    super.dispose();
-  }
-
-  Future<void> _loadPinState() async {
-    try {
-      final hasPin = await _authService.hasPin();
-      if (!mounted) return;
-      setState(() {
-        _pinSet = hasPin;
-        _pinVerified = !widget.firstRun && hasPin ? false : widget.firstRun;
-        _loadingPinState = false;
-        _pinLoadError = null;
-      });
-    } catch (_) {
-      if (!mounted) return;
-      setState(() {
-        _loadingPinState = false;
-        _pinLoadError = 'Noti could not load your admin security settings.';
-      });
-    }
-  }
-
-  Future<void> _savePin() async {
-    if (_pinController.text.trim().length < 4) return;
-    try {
-      await _authService.setPin(_pinController.text.trim());
-      if (!mounted) return;
-      setState(() {
-        _pinSet = true;
-        _pinVerified = true;
-        _pinController.clear();
-      });
-    } catch (_) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Could not save the PIN. Please try again.'),
-        ),
-      );
-    }
-  }
-
-  Future<void> _verifyPin() async {
-    try {
-      final ok = await _authService.verifyPin(_pinController.text.trim());
-      if (!mounted) return;
-      if (ok) {
-        setState(() {
-          _pinVerified = true;
-          _pinController.clear();
-        });
-      } else {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('Incorrect PIN')));
-      }
-    } catch (_) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Could not verify the PIN. Please try again.'),
-        ),
-      );
-    }
-  }
-
-  Future<void> _verifyWithBiometrics() async {
-    final ok = await _authService.authenticateWithBiometrics(
-      reason: 'Unlock Noti Admin to continue.',
-    );
-    if (!mounted) return;
-    if (ok) {
-      setState(() {
-        _pinVerified = true;
-        _pinController.clear();
-      });
-    } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Biometric verification failed')),
-      );
-    }
-  }
 
   Future<void> _signOut() async {
     await _authService.signOut();
@@ -131,92 +33,6 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
 
   @override
   Widget build(BuildContext context) {
-    if (_loadingPinState) {
-      return const Scaffold(
-        body: Center(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              CircularProgressIndicator(),
-              SizedBox(height: 16),
-              Text('Loading admin security...'),
-            ],
-          ),
-        ),
-      );
-    }
-
-    if (_pinLoadError != null) {
-      return Scaffold(
-        appBar: AppBar(title: const Text('Noti Admin')),
-        body: Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 420),
-            child: Padding(
-              padding: const EdgeInsets.all(24),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Icon(Icons.cloud_off_rounded, size: 44),
-                  const SizedBox(height: 16),
-                  Text(
-                    _pinLoadError!,
-                    textAlign: TextAlign.center,
-                    style: Theme.of(context).textTheme.titleMedium,
-                  ),
-                  const SizedBox(height: 20),
-                  FilledButton.icon(
-                    onPressed: () {
-                      setState(() {
-                        _loadingPinState = true;
-                        _pinLoadError = null;
-                      });
-                      _loadPinState();
-                    },
-                    icon: const Icon(Icons.refresh_rounded),
-                    label: const Text('Try again'),
-                  ),
-                  TextButton(
-                    onPressed: _signOut,
-                    child: const Text('Sign out'),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
-      );
-    }
-
-    if (!_pinSet) {
-      return Scaffold(
-        appBar: AppBar(title: const Text('Create Admin PIN')),
-        body: _PinPanel(
-          title: 'Create a PIN',
-          message:
-              'This PIN is stored on the device and will be required before sending or managing announcements.',
-          controller: _pinController,
-          actionLabel: 'Save PIN',
-          onAction: _savePin,
-        ),
-      );
-    }
-
-    if (!_pinVerified) {
-      return Scaffold(
-        appBar: AppBar(title: const Text('Verify PIN')),
-        body: _PinPanel(
-          title: 'Verify your PIN',
-          message:
-              'Enter your device PIN to continue into the admin dashboard.',
-          controller: _pinController,
-          actionLabel: 'Verify PIN',
-          onAction: _verifyPin,
-          onBiometricAction: _verifyWithBiometrics,
-        ),
-      );
-    }
-
     return Scaffold(
       appBar: AppBar(
         title: const Text('Noti Admin'),
@@ -260,7 +76,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                     : displayName.split(RegExp(r'\s+')).first;
                 return Text(
                   firstName.isEmpty
-                      ? 'Church Admin Dashboard'
+                      ? 'Director Dashboard'
                       : 'Hello there, $firstName',
                   style: Theme.of(context).textTheme.headlineSmall?.copyWith(
                     fontWeight: FontWeight.w800,
@@ -270,7 +86,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
             ),
             const SizedBox(height: 8),
             Text(
-              'Create announcements, keep your device list healthy, and prepare push-ready updates for every registered device.',
+              'Manage Maranatha Church announcements, connected tablets, and notifications.',
               style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                 color: Theme.of(context).colorScheme.onSurfaceVariant,
               ),
@@ -305,7 +121,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
             _ActionTile(
               icon: Icons.devices_rounded,
               title: 'Connected devices',
-              subtitle: 'Review the device dashboard from the member app.',
+              subtitle: 'Approve, rename, disable, or delete devices.',
               onTap: () {
                 Navigator.of(context).push(
                   MaterialPageRoute(
@@ -327,76 +143,21 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                 );
               },
             ),
+            const SizedBox(height: 12),
+            _ActionTile(
+              icon: Icons.library_music_rounded,
+              title: 'Song notifications',
+              subtitle:
+                  'Edit or delete song alerts during the five-minute window.',
+              onTap: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => const DirectorSongDeliveryScreen(),
+                  ),
+                );
+              },
+            ),
           ],
-        ),
-      ),
-    );
-  }
-}
-
-class _PinPanel extends StatelessWidget {
-  const _PinPanel({
-    required this.title,
-    required this.message,
-    required this.controller,
-    required this.actionLabel,
-    required this.onAction,
-    this.onBiometricAction,
-  });
-
-  final String title;
-  final String message;
-  final TextEditingController controller;
-  final String actionLabel;
-  final Future<void> Function() onAction;
-  final Future<void> Function()? onBiometricAction;
-
-  @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 440),
-        child: Padding(
-          padding: const EdgeInsets.all(20),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                title,
-                style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                  fontWeight: FontWeight.w800,
-                ),
-              ),
-              const SizedBox(height: 8),
-              Text(message, textAlign: TextAlign.center),
-              const SizedBox(height: 20),
-              TextField(
-                controller: controller,
-                keyboardType: TextInputType.number,
-                obscureText: true,
-                decoration: const InputDecoration(
-                  labelText: 'PIN',
-                  prefixIcon: Icon(Icons.lock_outline_rounded),
-                ),
-              ),
-              const SizedBox(height: 16),
-              SizedBox(
-                width: double.infinity,
-                child: FilledButton(
-                  onPressed: onAction,
-                  child: Text(actionLabel),
-                ),
-              ),
-              if (onBiometricAction != null) ...[
-                const SizedBox(height: 10),
-                TextButton.icon(
-                  onPressed: onBiometricAction,
-                  icon: const Icon(Icons.fingerprint_rounded),
-                  label: const Text('Use biometrics'),
-                ),
-              ],
-            ],
-          ),
         ),
       ),
     );

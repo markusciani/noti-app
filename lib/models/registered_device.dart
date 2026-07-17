@@ -15,6 +15,15 @@ class RegisteredDevice {
     required this.isDisabled,
     required this.minimumSupportedVersion,
     required this.isOutdated,
+    required this.organizationId,
+    required this.organizationName,
+    required this.joinStatus,
+    required this.deviceType,
+    required this.displayName,
+    required this.firstName,
+    required this.lastName,
+    required this.deviceNumber,
+    required this.staffAccessRequested,
   });
 
   final String id;
@@ -30,6 +39,17 @@ class RegisteredDevice {
   final bool isDisabled;
   final String minimumSupportedVersion;
   final bool isOutdated;
+  final String organizationId;
+  final String organizationName;
+  final String joinStatus;
+  final String deviceType;
+  final String displayName;
+  final String firstName;
+  final String lastName;
+  final String deviceNumber;
+  final bool staffAccessRequested;
+
+  bool get isApproved => joinStatus == 'approved';
 
   factory RegisteredDevice.fromFirestore(DocumentSnapshot doc) {
     final data = (doc.data() as Map<String, dynamic>?) ?? {};
@@ -54,6 +74,16 @@ class RegisteredDevice {
       isDisabled: data['isDisabled'] ?? false,
       minimumSupportedVersion: data['minimumSupportedVersion'] ?? '',
       isOutdated: data['isOutdated'] ?? false,
+      organizationId: data['organizationId'] ?? '',
+      organizationName: data['organizationName'] ?? '',
+      joinStatus: data['joinStatus'] ?? 'approved',
+      deviceType: data['deviceType'] ?? 'unknown',
+      displayName:
+          data['displayName'] ?? data['deviceName'] ?? 'Unknown device',
+      firstName: data['firstName'] ?? '',
+      lastName: data['lastName'] ?? '',
+      deviceNumber: data['deviceNumber'] ?? '',
+      staffAccessRequested: data['staffAccessRequested'] as bool? ?? false,
     );
   }
 }

@@ -7,6 +7,9 @@ import 'package:package_info_plus/package_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 
+import '../models/device_registration.dart';
+import '../models/organization.dart';
+
 class DeviceService {
   DeviceService({
     FirebaseFirestore? firestore,
@@ -24,6 +27,7 @@ class DeviceService {
   final DeviceInfoPlugin _deviceInfo;
 
   static const _deviceIdKey = 'noti_device_id';
+  static const _staffAccessKey = 'noti_staff_access';
   static const _collection = 'devices';
 
   Future<String> _ensureDeviceOwner() async {
@@ -45,6 +49,96 @@ class DeviceService {
     final id = const Uuid().v4();
     await prefs.setString(_deviceIdKey, id);
     return id;
+  }
+
+  Future<String?> currentDeviceId() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_deviceIdKey);
+  }
+
+  Future<bool> staffAccessEnabled() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (prefs.containsKey(_staffAccessKey)) {
+      return prefs.getBool(_staffAccessKey) ?? false;
+    }
+    final deviceId = prefs.getString(_deviceIdKey);
+    if (deviceId != null && deviceId.isNotEmpty) {
+      final snapshot = await _firestore
+          .collection(_collection)
+          .doc(deviceId)
+          .get();
+      if (snapshot.data()?['staffAccessRequested'] == true) return true;
+    }
+    return false;
+  }
+
+  Future<void> enableStaffAccess() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_staffAccessKey, true);
+
+    final deviceId = prefs.getString(_deviceIdKey);
+    if (deviceId == null || deviceId.isEmpty) return;
+
+    try {
+      await _firestore.collection(_collection).doc(deviceId).set({
+        'staffAccessRequested': true,
+        'deviceType': 'director_tablet',
+        'organizationId': Organization.defaultId,
+        'organizationName': Organization.defaultName,
+      }, SetOptions(merge: true));
+    } catch (_) {
+      // The local device credential still controls the local director entry.
+    }
+  }
+
+  Future<void> disableStaffAccess() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_staffAccessKey, false);
+
+    final deviceId = prefs.getString(_deviceIdKey);
+    if (deviceId == null || deviceId.isEmpty) return;
+
+    try {
+      await _firestore.collection(_collection).doc(deviceId).set({
+        'staffAccessRequested': false,
+      }, SetOptions(merge: true));
+    } catch (_) {
+      // Local access is authoritative for this device. A stale or deleted
+      // Firestore record must not prevent the director tools from hiding.
+    }
+  }
+
+  Future<bool> needsOnboarding() async {
+    final deviceId = await currentDeviceId();
+    if (deviceId == null || deviceId.isEmpty) return true;
+
+    final snapshot = await _firestore
+        .collection(_collection)
+        .doc(deviceId)
+        .get();
+    if (!snapshot.exists) return true;
+    final data = snapshot.data() ?? const <String, dynamic>{};
+    final organizationId = data['organizationId'] as String? ?? '';
+    final joinStatus = data['joinStatus'] as String? ?? 'approved';
+    return organizationId.isEmpty || joinStatus == 'rejected';
+  }
+
+  Future<String?> approvedOrganizationId() async {
+    final deviceId = await currentDeviceId();
+    if (deviceId == null || deviceId.isEmpty) return null;
+    final snapshot = await _firestore
+        .collection(_collection)
+        .doc(deviceId)
+        .get();
+    final data = snapshot.data();
+    if (!snapshot.exists || data?['isDisabled'] == true) return null;
+    if ((data?['joinStatus'] as String? ?? 'approved') != 'approved') {
+      return null;
+    }
+    final organizationId = data?['organizationId'] as String?;
+    return organizationId == null || organizationId.isEmpty
+        ? Organization.defaultId
+        : organizationId;
   }
 
   Future<Map<String, dynamic>> _collectPlatformData() async {
@@ -181,7 +275,9 @@ class DeviceService {
     return false;
   }
 
-  Future<void> registerDevice() async {
+  Future<void> registerDevice({
+    required DeviceRegistration registration,
+  }) async {
     final settings = await _firestore.collection('settings').doc('app').get();
     final settingsData = settings.data() ?? {};
     final registrationEnabled =
@@ -192,15 +288,42 @@ class DeviceService {
 
     final deviceId = await _getOrCreateDeviceId();
     final ownerUid = await _ensureDeviceOwner();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_staffAccessKey, registration.staffAccessRequested);
     final platformData = await _collectPlatformData();
+    final owner = _auth.currentUser;
+    final deviceNumber = registration.deviceNumber.trim();
+    final displayName = deviceNumber.isEmpty
+        ? registration.displayName.trim()
+        : 'Maranatha $deviceNumber';
+    if (owner != null &&
+        displayName.isNotEmpty &&
+        owner.displayName != displayName) {
+      await owner.updateDisplayName(displayName);
+    }
 
-    await _firestore.collection(_collection).doc(deviceId).set({
+    final ref = _firestore.collection(_collection).doc(deviceId);
+    final existing = await ref.get();
+    final existingData = existing.data() ?? const <String, dynamic>{};
+    final existingStatus = existingData['joinStatus'] as String?;
+    await ref.set({
       ...platformData,
       'id': deviceId,
       'ownerUid': ownerUid,
-      'firstSeenAt': FieldValue.serverTimestamp(),
+      'firstSeenAt':
+          existingData['firstSeenAt'] ?? FieldValue.serverTimestamp(),
       'lastSeenAt': FieldValue.serverTimestamp(),
       'isDisabled': false,
+      'organizationId': registration.organizationId,
+      'organizationName': registration.organizationName,
+      'joinStatus': existingStatus ?? 'pending',
+      'deviceType': registration.deviceType,
+      'displayName': displayName,
+      'deviceName': displayName,
+      'firstName': registration.firstName,
+      'lastName': registration.lastName,
+      'deviceNumber': deviceNumber,
+      'staffAccessRequested': registration.staffAccessRequested,
     }, SetOptions(merge: true));
   }
 
@@ -213,10 +336,15 @@ class DeviceService {
 
     final platformData = await _collectPlatformData();
     await _ensureDeviceOwner();
-    await _firestore.collection(_collection).doc(deviceId).set({
+    final ref = _firestore.collection(_collection).doc(deviceId);
+    final existing = await ref.get();
+    final deviceNumber = (existing.data()?['deviceNumber'] as String? ?? '')
+        .trim();
+    await ref.set({
       ...platformData,
       'id': deviceId,
       'lastSeenAt': FieldValue.serverTimestamp(),
+      if (deviceNumber.isNotEmpty) 'displayName': 'Maranatha $deviceNumber',
     }, SetOptions(merge: true));
   }
 

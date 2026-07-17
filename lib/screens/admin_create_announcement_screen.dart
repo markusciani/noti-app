@@ -5,9 +5,14 @@ import '../services/firestore_service.dart';
 import '../widgets/adaptive_page_body.dart';
 
 class AdminCreateAnnouncementScreen extends StatefulWidget {
-  const AdminCreateAnnouncementScreen({super.key, this.announcement});
+  const AdminCreateAnnouncementScreen({
+    super.key,
+    this.announcement,
+    this.organizationId,
+  });
 
   final Announcement? announcement;
+  final String? organizationId;
 
   @override
   State<AdminCreateAnnouncementScreen> createState() =>
@@ -19,7 +24,6 @@ class _AdminCreateAnnouncementScreenState
   final _formKey = GlobalKey<FormState>();
   final _titleController = TextEditingController();
   final _messageController = TextEditingController();
-  final _authorController = TextEditingController(text: 'Admin');
   final _firestoreService = FirestoreService();
 
   bool _pinned = false;
@@ -35,9 +39,6 @@ class _AdminCreateAnnouncementScreenState
     if (announcement != null) {
       _titleController.text = announcement.title;
       _messageController.text = announcement.message;
-      _authorController.text = announcement.author.isEmpty
-          ? 'Admin'
-          : announcement.author;
       _pinned = announcement.pinned;
     }
   }
@@ -46,7 +47,6 @@ class _AdminCreateAnnouncementScreenState
   void dispose() {
     _titleController.dispose();
     _messageController.dispose();
-    _authorController.dispose();
     super.dispose();
   }
 
@@ -81,7 +81,7 @@ class _AdminCreateAnnouncementScreenState
     if (!_formKey.currentState!.validate()) return;
     final confirmed = await _confirmPublish();
     if (!confirmed) return;
-
+    if (!mounted) return;
     setState(() {
       _saving = true;
       _error = null;
@@ -93,15 +93,18 @@ class _AdminCreateAnnouncementScreenState
           id: widget.announcement!.id,
           title: _titleController.text.trim(),
           message: _messageController.text.trim(),
-          author: _authorController.text.trim(),
+          author: 'Director',
           pinned: _pinned,
+          organizationId:
+              widget.organizationId ?? widget.announcement?.organizationId,
         );
       } else {
         await _firestoreService.addAnnouncement(
           title: _titleController.text.trim(),
           message: _messageController.text.trim(),
-          author: _authorController.text.trim(),
+          author: 'Director',
           pinned: _pinned,
+          organizationId: widget.organizationId,
         );
       }
 
@@ -131,9 +134,6 @@ class _AdminCreateAnnouncementScreenState
     final previewMessage = _messageController.text.trim().isEmpty
         ? 'Preview text will appear here as the admin types.'
         : _messageController.text.trim();
-    final previewAuthor = _authorController.text.trim().isEmpty
-        ? 'Admin'
-        : _authorController.text.trim();
 
     return Scaffold(
       appBar: AppBar(
@@ -221,26 +221,19 @@ class _AdminCreateAnnouncementScreenState
                                 ),
                           ),
                           const SizedBox(height: 14),
-                          Row(
-                            children: [
-                              Text(
-                                previewAuthor,
-                                style: Theme.of(context).textTheme.labelLarge
-                                    ?.copyWith(fontWeight: FontWeight.w700),
-                              ),
-                              const Spacer(),
-                              if (_pinned)
-                                Chip(
-                                  label: const Text('Pinned'),
-                                  backgroundColor: colors.primaryContainer,
-                                  labelStyle: TextStyle(
-                                    color: colors.primary,
-                                    fontWeight: FontWeight.w700,
-                                  ),
-                                  side: BorderSide.none,
+                          if (_pinned)
+                            Align(
+                              alignment: Alignment.centerLeft,
+                              child: Chip(
+                                label: const Text('Pinned'),
+                                backgroundColor: colors.primaryContainer,
+                                labelStyle: TextStyle(
+                                  color: colors.primary,
+                                  fontWeight: FontWeight.w700,
                                 ),
-                            ],
-                          ),
+                                side: BorderSide.none,
+                              ),
+                            ),
                         ],
                       ),
                     ),
@@ -273,11 +266,6 @@ class _AdminCreateAnnouncementScreenState
                         : null,
                   ),
                   const SizedBox(height: 12),
-                  TextFormField(
-                    controller: _authorController,
-                    decoration: const InputDecoration(labelText: 'Author'),
-                    onChanged: (_) => setState(() {}),
-                  ),
                   const SizedBox(height: 8),
                   SwitchListTile(
                     contentPadding: EdgeInsets.zero,
