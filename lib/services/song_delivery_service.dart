@@ -4,6 +4,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 
 import '../models/song_delivery.dart';
 import '../models/song_file.dart';
+import 'auth_service.dart';
 
 class SongDeliveryService {
   SongDeliveryService({
@@ -77,10 +78,17 @@ class SongDeliveryService {
 
   Future<void> _call(String name, Map<String, dynamic> data) async {
     final user = _auth.currentUser;
-    if (user == null || user.isAnonymous) {
-      throw StateError(
-        'Sign in as a director or founder before sending songs.',
-      );
+    if (user == null) {
+      throw StateError('A device identity is required before sending songs.');
+    }
+    if (user.isAnonymous) {
+      final role = await AuthService(
+        auth: _auth,
+        firestore: _firestore,
+      ).currentStaffRole();
+      if (role != StaffRole.director) {
+        throw StateError('Open director access before sending songs.');
+      }
     }
     await user.getIdToken(true);
     await _functions.httpsCallable(name).call<Map<String, dynamic>>(data);

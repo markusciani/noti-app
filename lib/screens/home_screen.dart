@@ -2,10 +2,10 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:package_info_plus/package_info_plus.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/announcement.dart';
 import '../models/device_registration.dart';
+import '../models/organization.dart';
 import 'admin_entry_screen.dart';
 import '../services/device_service.dart';
 import '../services/firestore_service.dart';
@@ -14,8 +14,6 @@ import '../services/auth_service.dart';
 import '../widgets/adaptive_page_body.dart';
 import 'announcement_detail_screen.dart';
 import '../services/music_directory_service.dart';
-import 'device_onboarding_screen.dart';
-import 'device_review_screen.dart';
 import 'music_folder_screen.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -34,13 +32,10 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _registeredDevice = false;
   bool _showStaffEntry = false;
   bool _directorRole = false;
-  bool _localDirectorBypass = false;
-  bool _deviceApprovalResolved = false;
-  bool _deviceApproved = false;
+  bool _secureDirectorTablet = false;
   bool _deviceDisabled = false;
   StreamSubscription? _deviceSubscription;
   StreamSubscription<Map<String, dynamic>>? _notificationOpenSubscription;
-  static const _directorPromptKey = 'noti_director_prompted';
   DateTime? _lastTitleTap;
   int _titleTapCount = 0;
 
@@ -57,10 +52,33 @@ class _HomeScreenState extends State<HomeScreen> {
     if (_registeredDevice) return;
     _registeredDevice = true;
     try {
+      final secureDirectorTablet = await AuthService()
+          .hasSecureDeviceCredential();
+      final authService = AuthService();
+      final currentRole = await authService.currentStaffRole();
+      if (secureDirectorTablet && currentRole != StaffRole.director) {
+        try {
+          await authService.claimDirectorAccess(
+            fallbackCode: AuthService.directorFallbackCode,
+          );
+        } catch (_) {
+          // Keep the device usable offline even if role sync is delayed.
+        }
+      }
+      if (mounted) {
+        setState(() {
+          _secureDirectorTablet = secureDirectorTablet;
+        });
+      }
       DeviceRegistration? registration;
-      if (await _deviceService.needsOnboarding() && mounted) {
-        registration = await Navigator.of(context).push<DeviceRegistration>(
-          MaterialPageRoute(builder: (_) => const DeviceOnboardingScreen()),
+      if (await _deviceService.needsOnboarding()) {
+        registration = DeviceRegistration(
+          organizationId: Organization.defaultId,
+          organizationName: Organization.defaultName,
+          deviceType: secureDirectorTablet ? 'director_tablet' : 'tablet',
+          displayName: secureDirectorTablet
+              ? 'Maranatha Director Tablet'
+              : 'Maranatha Choir Tablet',
         );
       }
       if (registration != null) {
@@ -74,19 +92,14 @@ class _HomeScreenState extends State<HomeScreen> {
       await _deviceService.updatePresence();
       await _watchDeviceApproval();
       await _syncNotifications();
-      await _maybeAskDirectorAccess();
       final showStaffEntry = await _deviceService.staffAccessEnabled();
       final directorRole =
-          await AuthService().currentStaffRole() == StaffRole.director;
+          await authService.currentStaffRole() == StaffRole.director;
       if (mounted) {
         setState(() {
           _showStaffEntry = showStaffEntry;
           _directorRole = directorRole;
-          _localDirectorBypass = showStaffEntry || directorRole;
-          if (_localDirectorBypass && !_deviceDisabled) {
-            _deviceApprovalResolved = true;
-            _deviceApproved = true;
-          }
+          _secureDirectorTablet = secureDirectorTablet;
         });
       }
     } catch (_) {
@@ -94,178 +107,59 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  Future<void> _maybeAskDirectorAccess() async {
-    final prefs = await SharedPreferences.getInstance();
-    if (!mounted || prefs.getBool(_directorPromptKey) == true) {
-      return;
-    }
-    if (await _deviceService.staffAccessEnabled()) {
-      return;
-    }
-    if (!mounted) return;
-    await prefs.setBool(_directorPromptKey, true);
-    if (!mounted) return;
-
-    final wantsDirectorAccess = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('Are you a director?'),
-        content: const Text(
-          'Director tools are hidden for members. Choose Yes only on the tablet used to manage announcements and send songs.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(false),
-            child: const Text('No'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(dialogContext).pop(true),
-            child: const Text('Yes'),
-          ),
-        ],
-      ),
-    );
-    if (wantsDirectorAccess != true || !mounted) return;
-
-    await _enableDirectorAccess();
-  }
-
-  Future<bool> _enableDirectorAccess() async {
-    final auth = AuthService();
-    final existingRole = await auth.currentStaffRole();
-    var verified = await auth.authenticateDeviceCredential();
-    var recoveryCode = AuthService.directorFallbackCode;
-    if (!verified) {
-      final code = await _showDirectorFallbackDialog();
-      if (code == null) return false;
-      verified = code == AuthService.directorFallbackCode;
-      recoveryCode = code;
-    }
-    if (!verified) return false;
-
-    if (existingRole != StaffRole.director) {
-      await auth.claimDirectorAccess(fallbackCode: recoveryCode);
-    }
-
-    await _deviceService.enableStaffAccess();
-    await _syncNotifications();
-    if (mounted) {
-      setState(() {
-        _showStaffEntry = true;
-        _localDirectorBypass = true;
-        _deviceApprovalResolved = true;
-        _deviceApproved = true;
-      });
-    }
-    return true;
-  }
-
-  Future<String?> _showDirectorFallbackDialog() {
-    return showDialog<String>(
-      context: context,
-      builder: (dialogContext) {
-        final controller = TextEditingController();
-        return AlertDialog(
-          title: const Text('Director access'),
-          content: TextField(
-            controller: controller,
-            autofocus: true,
-            obscureText: true,
-            keyboardType: TextInputType.number,
-            maxLength: 4,
-            decoration: const InputDecoration(labelText: 'Recovery passcode'),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(dialogContext).pop(),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.of(dialogContext).pop(controller.text),
-              child: const Text('Continue'),
-            ),
-          ],
-        );
-      },
-    );
-  }
-
   Future<void> _showVersionDialog() async {
     final info = await PackageInfo.fromPlatform();
     if (!mounted) return;
-    var staffEnabled = await _deviceService.staffAccessEnabled();
-    if (!mounted) return;
+    final roleLabel = _directorRole || _showStaffEntry || _secureDirectorTablet
+        ? 'Director tablet'
+        : 'Choir member tablet';
+    final roleSubtitle = _directorRole || _showStaffEntry
+        ? 'Director tools are enabled on this tablet.'
+        : _secureDirectorTablet
+        ? 'Director tools are available and protected by the tablet lock screen.'
+        : 'Director tools stay hidden on this tablet.';
     await showDialog<void>(
       context: context,
-      builder: (dialogContext) => StatefulBuilder(
-        builder: (context, setDialogState) => AlertDialog(
-          icon: Icon(
-            Icons.notifications_active_rounded,
-            color: Theme.of(context).colorScheme.primary,
-          ),
-          title: const Text('Noti'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text('Version ${info.version} (${info.buildNumber})'),
-              const SizedBox(height: 14),
-              const Text(
-                'Managed by Ciani01 Organization.\nBuilt for Maranatha Church.',
-                textAlign: TextAlign.center,
+      builder: (dialogContext) => AlertDialog(
+        icon: Icon(
+          Icons.notifications_active_rounded,
+          color: Theme.of(context).colorScheme.primary,
+        ),
+        title: const Text('Noti'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text('Version ${info.version} (${info.buildNumber})'),
+            const SizedBox(height: 14),
+            const Text(
+              'Managed by Ciani01 Organization.\nBuilt for Maranatha Church.',
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 14),
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: Icon(
+                _directorRole || _showStaffEntry || _secureDirectorTablet
+                    ? Icons.verified_user_rounded
+                    : Icons.group_rounded,
               ),
-              const SizedBox(height: 14),
-              SwitchListTile.adaptive(
-                contentPadding: EdgeInsets.zero,
-                title: const Text('Director tools'),
-                subtitle: Text(
-                  staffEnabled ? 'Shown on this device' : 'Hidden from members',
-                ),
-                value: staffEnabled,
-                onChanged: (value) async {
-                  try {
-                    if (value) {
-                      final enabled = await _enableDirectorAccess();
-                      if (!enabled) {
-                        if (mounted && dialogContext.mounted) {
-                          ScaffoldMessenger.of(dialogContext).showSnackBar(
-                            const SnackBar(
-                              content: Text(
-                                'Use fingerprint, face unlock, or the Android device lock to enable Director tools.',
-                              ),
-                            ),
-                          );
-                        }
-                        return;
-                      }
-                    } else {
-                      if (!dialogContext.mounted) return;
-                      setDialogState(() => staffEnabled = false);
-                      if (mounted) setState(() => _showStaffEntry = false);
-                      await _deviceService.disableStaffAccess();
-                      await _syncNotifications();
-                      return;
-                    }
-                    if (!dialogContext.mounted) return;
-                    setDialogState(() => staffEnabled = value);
-                  } catch (_) {
-                    if (!mounted || !dialogContext.mounted) return;
-                    ScaffoldMessenger.of(dialogContext).showSnackBar(
-                      const SnackBar(
-                        content: Text('Director access could not be changed.'),
-                      ),
-                    );
-                  }
-                },
+              title: const Text('Detected role'),
+              subtitle: Text(roleSubtitle),
+              trailing: Text(
+                roleLabel,
+                style: Theme.of(
+                  context,
+                ).textTheme.labelLarge?.copyWith(fontWeight: FontWeight.w700),
               ),
-            ],
-          ),
-          actions: [
-            FilledButton(
-              onPressed: () => Navigator.of(dialogContext).pop(),
-              child: const Text('Close'),
             ),
           ],
         ),
+        actions: [
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('Close'),
+          ),
+        ],
       ),
     );
   }
@@ -291,7 +185,7 @@ class _HomeScreenState extends State<HomeScreen> {
         builder: (dialogContext) => AlertDialog(
           title: const Text('Allow access to your files?'),
           content: const Text(
-            'Noti can watch the Music folder on this device so song notifications can open the matching file for you. Android will ask you to choose the storage location. Noti does not upload your files.',
+            'Noti can use the default Music folder on this device so song notifications can open the matching file for you. Android may ask for storage access. Noti does not upload your files.',
           ),
           actions: [
             TextButton(
@@ -317,15 +211,13 @@ class _HomeScreenState extends State<HomeScreen> {
     final localStaffAccess = await _deviceService.staffAccessEnabled();
     final localDirectorRole =
         await AuthService().currentStaffRole() == StaffRole.director;
-    if (mounted &&
-        (localStaffAccess || localDirectorRole) &&
-        !_deviceDisabled) {
+    final secureDirectorTablet = await AuthService()
+        .hasSecureDeviceCredential();
+    if (mounted) {
       setState(() {
         _showStaffEntry = localStaffAccess;
         _directorRole = localDirectorRole;
-        _localDirectorBypass = true;
-        _deviceApprovalResolved = true;
-        _deviceApproved = true;
+        _secureDirectorTablet = secureDirectorTablet;
       });
     }
     await _deviceSubscription?.cancel();
@@ -333,38 +225,19 @@ class _HomeScreenState extends State<HomeScreen> {
       snapshot,
     ) {
       final data = snapshot.data();
-      final isDirectorTablet = data?['deviceType'] == 'director_tablet';
-      final staffAccessRequested =
-          data?['staffAccessRequested'] as bool? ?? false;
-      final approved =
-          (((data?['joinStatus'] as String? ?? 'approved') == 'approved') ||
-              isDirectorTablet ||
-              staffAccessRequested ||
-              _localDirectorBypass) &&
-          data?['isDisabled'] != true;
       if (mounted) {
         setState(() {
-          _deviceApprovalResolved = snapshot.exists || _localDirectorBypass;
-          _deviceApproved = approved;
           _deviceDisabled = data?['isDisabled'] == true;
         });
       }
-      if ((data?['joinStatus'] == 'approved') ||
-          isDirectorTablet ||
-          staffAccessRequested ||
-          _localDirectorBypass) {
-        unawaited(_syncNotifications());
-      } else {
-        unawaited(NotificationService().syncOrganizationTopic(null));
-      }
+      unawaited(_syncNotifications());
     });
   }
 
   Future<void> _syncNotifications() async {
     final organizationId = await _deviceService.approvedOrganizationId();
     await NotificationService().syncOrganizationTopic(organizationId);
-    final directorEnabled =
-        await _deviceService.staffAccessEnabled() || _directorRole;
+    final directorEnabled = _directorRole || _secureDirectorTablet;
     await NotificationService().syncDirectorTopic(
       organizationId,
       enabled: directorEnabled,
@@ -374,17 +247,7 @@ class _HomeScreenState extends State<HomeScreen> {
   void _handleOpenedNotification(Map<String, dynamic> data) {
     if (!mounted) return;
     final type = data['type']?.toString();
-    if (type != 'device_review') return;
-    final deviceId = data['deviceId']?.toString().trim() ?? '';
-    if (deviceId.isEmpty) return;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      Navigator.of(context).push(
-        MaterialPageRoute(
-          builder: (_) => DeviceReviewScreen(deviceId: deviceId),
-        ),
-      );
-    });
+    if (type == 'device_review') return;
   }
 
   @override
@@ -411,7 +274,7 @@ class _HomeScreenState extends State<HomeScreen> {
           onTap: _handleTitleTap,
           child: const Text('Noti'),
         ),
-        actions: _deviceApproved
+        actions: !_deviceDisabled
             ? [
                 IconButton(
                   tooltip: 'File access',
@@ -424,7 +287,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   },
                   icon: const Icon(Icons.folder_shared_rounded),
                 ),
-                if (_showStaffEntry || _directorRole)
+                if (_showStaffEntry || _directorRole || _secureDirectorTablet)
                   IconButton(
                     tooltip: 'Director tools',
                     onPressed: () {
@@ -439,7 +302,7 @@ class _HomeScreenState extends State<HomeScreen> {
               ]
             : const [],
       ),
-      body: !_deviceApprovalResolved || !_deviceApproved
+      body: _deviceDisabled
           ? SafeArea(
               child: Center(
                 child: Padding(
@@ -448,17 +311,13 @@ class _HomeScreenState extends State<HomeScreen> {
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       Icon(
-                        _deviceDisabled
-                            ? Icons.block_rounded
-                            : Icons.hourglass_top_rounded,
+                        Icons.block_rounded,
                         size: 48,
                         color: colors.primary,
                       ),
                       const SizedBox(height: 18),
                       Text(
-                        _deviceDisabled
-                            ? 'This device is disabled.'
-                            : 'You will have to wait until you have been approved.',
+                        'This device is disabled.',
                         textAlign: TextAlign.center,
                         style: Theme.of(context).textTheme.titleLarge?.copyWith(
                           fontWeight: FontWeight.w700,

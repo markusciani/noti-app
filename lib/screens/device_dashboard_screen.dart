@@ -244,10 +244,7 @@ class DeviceDashboardScreen extends StatelessWidget {
                           onDelete: () async {
                             await deviceService.deleteDevice(device.id);
                           },
-                          onApprove: device.joinStatus == 'pending'
-                              ? () =>
-                                    organizationService.approveDevice(device.id)
-                              : null,
+                          onApprove: null,
                           onRename: () => _renameDevice(
                             context,
                             device,
@@ -397,11 +394,6 @@ class _DeviceTile extends StatelessWidget {
                 ? device.organizationId
                 : device.organizationName,
           ),
-          _DetailRow(label: 'Join status', value: device.joinStatus),
-          _DetailRow(
-            label: 'Staff access requested',
-            value: device.staffAccessRequested ? 'Yes' : 'No',
-          ),
           _DetailRow(
             label: 'Type',
             value: _deviceTypes[device.deviceType] ?? device.deviceType,
@@ -435,13 +427,6 @@ class _DeviceTile extends StatelessWidget {
             spacing: 10,
             runSpacing: 10,
             children: [
-              if (onApprove != null) ...[
-                FilledButton.icon(
-                  onPressed: onApprove,
-                  icon: const Icon(Icons.how_to_reg_rounded),
-                  label: const Text('Approve'),
-                ),
-              ],
               OutlinedButton.icon(
                 onPressed: onRename,
                 icon: const Icon(Icons.edit_rounded),

@@ -3,6 +3,7 @@ import 'package:cloud_functions/cloud_functions.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 import '../models/custom_notification_delivery.dart';
+import 'auth_service.dart';
 
 class PushNotificationService {
   PushNotificationService({
@@ -21,10 +22,14 @@ class PushNotificationService {
     String? organizationId,
   }) async {
     final user = FirebaseAuth.instance.currentUser;
-    if (user == null || user.isAnonymous) {
-      throw StateError(
-        'Sign in with an administrator account before sending a notification.',
-      );
+    if (user == null) {
+      throw StateError('A device identity is required before sending a notification.');
+    }
+    if (user.isAnonymous) {
+      final role = await AuthService().currentStaffRole();
+      if (role != StaffRole.director) {
+        throw StateError('Open director access before sending a notification.');
+      }
     }
 
     // Ensure the callable request carries a current Firebase Auth token.
@@ -92,10 +97,14 @@ class PushNotificationService {
 
   Future<void> _call(String function, Map<String, dynamic> data) async {
     final user = FirebaseAuth.instance.currentUser;
-    if (user == null || user.isAnonymous) {
-      throw StateError(
-        'Sign in with an administrator account before sending a notification.',
-      );
+    if (user == null) {
+      throw StateError('A device identity is required before sending a notification.');
+    }
+    if (user.isAnonymous) {
+      final role = await AuthService().currentStaffRole();
+      if (role != StaffRole.director) {
+        throw StateError('Open director access before sending a notification.');
+      }
     }
     await user.getIdToken(true);
     await _functions.httpsCallable(function).call<Map<String, dynamic>>(data);

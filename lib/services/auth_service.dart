@@ -122,6 +122,30 @@ class AuthService {
     }
   }
 
+  Future<bool> hasSecureDeviceCredential() async {
+    if (kIsWeb) return false;
+
+    if (defaultTargetPlatform == TargetPlatform.iOS ||
+        defaultTargetPlatform == TargetPlatform.macOS) {
+      try {
+        return await LocalAuthentication().isDeviceSupported();
+      } catch (_) {
+        return false;
+      }
+    }
+
+    try {
+      return await _deviceAuthChannel.invokeMethod<bool>(
+            'hasSecureDeviceCredential',
+          ) ??
+          false;
+    } on MissingPluginException {
+      return false;
+    } on PlatformException {
+      return false;
+    }
+  }
+
   Future<void> claimDirectorAccess({required String fallbackCode}) async {
     final user = _auth.currentUser ?? (await _auth.signInAnonymously()).user;
     if (user == null) {

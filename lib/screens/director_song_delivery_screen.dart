@@ -254,8 +254,35 @@ class _DirectorSongDeliveryScreenState
     if (value.contains('permission-denied')) {
       return 'This signed-in account is not approved as a director.';
     }
+    if (value.contains('unauthenticated')) {
+      return 'Director access is not active on this tablet. Open the director panel again and retry.';
+    }
     if (value.contains('failed-precondition')) {
       return 'The five-minute correction window has ended.';
+    }
+    if (value.contains('music_folder_missing')) {
+      return 'Choose the shared Music folder on this tablet first.';
+    }
+    if (value.contains('outside_music_folder')) {
+      return 'Choose a song or PDF inside the shared Music folder.';
+    }
+    if (value.contains('invalid_song')) {
+      return 'Choose a file instead of the folder itself.';
+    }
+    if (value.contains('song_selection_failed')) {
+      return 'Noti could not read that file. Try choosing it again from the Music folder.';
+    }
+    if (value.contains('picker_busy')) {
+      return 'The song picker is already open. Close it and try again.';
+    }
+    if (value.contains('Open director access before sending songs.')) {
+      return 'Director access is not active on this tablet. Open the director panel again and retry.';
+    }
+    if (value.contains('A device identity is required before sending songs.')) {
+      return 'Noti could not verify this device yet. Reopen the app and try again.';
+    }
+    if (value.contains('internal')) {
+      return 'The Noti backend reported an internal error while sending this song delivery.';
     }
     return 'Could not complete that song delivery. Check your connection and try again.';
   }

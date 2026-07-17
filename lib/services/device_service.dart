@@ -292,16 +292,12 @@ class DeviceService {
     final deviceId = await _getOrCreateDeviceId();
     final ownerUid = await _ensureDeviceOwner();
     final prefs = await SharedPreferences.getInstance();
-    final staffAccessRequested =
-        registration.staffAccessRequested ||
-        registration.deviceType == 'director_tablet';
+    final staffAccessRequested = registration.deviceType == 'director_tablet';
     await prefs.setBool(_staffAccessKey, staffAccessRequested);
     final platformData = await _collectPlatformData();
     final owner = _auth.currentUser;
-    final deviceNumber = registration.deviceNumber.trim();
-    final displayName = deviceNumber.isEmpty
-        ? registration.displayName.trim()
-        : 'Maranatha $deviceNumber';
+    final deviceNumber = '';
+    final displayName = registration.displayName.trim();
     if (owner != null &&
         displayName.isNotEmpty &&
         owner.displayName != displayName) {
@@ -325,8 +321,8 @@ class DeviceService {
       'deviceType': registration.deviceType,
       'displayName': displayName,
       'deviceName': displayName,
-      'firstName': registration.firstName,
-      'lastName': registration.lastName,
+      'firstName': '',
+      'lastName': '',
       'deviceNumber': deviceNumber,
       'staffAccessRequested': staffAccessRequested,
     }, SetOptions(merge: true));

@@ -83,13 +83,13 @@ class _MusicFolderScreenState extends State<MusicFolderScreen> {
                     Text(
                       _hasFolder
                           ? 'Music folder is ready'
-                          : 'Allow file access',
+                          : 'Allow Music folder access',
                       style: Theme.of(context).textTheme.headlineSmall
                           ?.copyWith(fontWeight: FontWeight.w800),
                     ),
                     const SizedBox(height: 10),
                     Text(
-                      'Allow Noti to access the files on this tablet. Noti watches the Music folder so directors can send song links that open locally on every tablet. Your files are not uploaded.',
+                      'Noti uses the default Music folder on this tablet so directors can send song links that open locally on every device. Your files are not uploaded.',
                       style: Theme.of(context).textTheme.bodyLarge?.copyWith(
                         color: colors.onSurfaceVariant,
                       ),
@@ -101,7 +101,7 @@ class _MusicFolderScreenState extends State<MusicFolderScreen> {
                         child: Text(
                           _hasFolder
                               ? 'When a director sends a song, tap Open song in the notification and Android will launch your default file app.'
-                              : 'This is required once per tablet. Android shows the permission picker so you control which storage location Noti can read.',
+                              : 'This is required once per tablet. Android will ask for storage access so Noti can read the default Music folder directly.',
                         ),
                       ),
                     ),
@@ -126,7 +126,7 @@ class _MusicFolderScreenState extends State<MusicFolderScreen> {
                         label: Text(
                           _hasFolder
                               ? 'Check Music folder access'
-                              : 'Allow file access',
+                              : 'Allow Music folder access',
                         ),
                       ),
                     ),

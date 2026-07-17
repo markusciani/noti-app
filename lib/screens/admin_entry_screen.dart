@@ -34,8 +34,11 @@ class _AdminEntryScreenState extends State<AdminEntryScreen> {
       final role = await auth.currentStaffRole();
       final deviceService = DeviceService();
       final localDirectorAccess = await deviceService.staffAccessEnabled();
+      final secureDirectorTablet = await auth.hasSecureDeviceCredential();
 
-      if (role != StaffRole.director && !localDirectorAccess) {
+      if (role != StaffRole.director &&
+          !localDirectorAccess &&
+          !secureDirectorTablet) {
         if (!mounted) return;
         setState(() {
           _loading = false;
@@ -44,6 +47,11 @@ class _AdminEntryScreenState extends State<AdminEntryScreen> {
         return;
       }
 
+      if (role != StaffRole.director) {
+        await auth.claimDirectorAccess(
+          fallbackCode: AuthService.directorFallbackCode,
+        );
+      }
       await deviceService.enableStaffAccess();
       if (!mounted) return;
       Navigator.of(context).pushReplacement(

@@ -7,6 +7,7 @@ import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/song_file.dart';
 import 'music_directory_service.dart';
@@ -23,6 +24,8 @@ class NotificationService {
   final FlutterLocalNotificationsPlugin _localNotifications;
   static final StreamController<Map<String, dynamic>> _openEvents =
       StreamController<Map<String, dynamic>>.broadcast();
+  static const _organizationTopicKey = 'noti_notification_org_id';
+  static const _directorTopicEnabledKey = 'noti_notification_director_enabled';
 
   static const AndroidNotificationChannel _channel = AndroidNotificationChannel(
     'noti_silent',
@@ -42,6 +45,9 @@ class NotificationService {
 
     FirebaseMessaging.onMessage.listen(_showMessage);
     FirebaseMessaging.onMessageOpenedApp.listen(_handleMessageOpen);
+    _messaging.onTokenRefresh.listen((_) {
+      unawaited(_restoreTopicSubscriptions());
+    });
     await _messaging.getInitialMessage().then((message) {
       if (message != null) _handleMessageOpen(message);
     });
@@ -368,15 +374,23 @@ class NotificationService {
   Future<void> syncOrganizationTopic(String? organizationId) async {
     // Remove the legacy broadcast topic so a device cannot receive another
     // organization's messages after it changes or leaves an organization.
+    final prefs = await SharedPreferences.getInstance();
     await _messaging.unsubscribeFromTopic('announcements');
-    if (organizationId == null || organizationId.trim().isEmpty) return;
-    await _messaging.subscribeToTopic(topicForOrganization(organizationId));
+    if (organizationId == null || organizationId.trim().isEmpty) {
+      await prefs.remove(_organizationTopicKey);
+      return;
+    }
+    final normalizedOrganizationId = organizationId.trim();
+    await _messaging.subscribeToTopic(topicForOrganization(normalizedOrganizationId));
+    await prefs.setString(_organizationTopicKey, normalizedOrganizationId);
   }
 
   Future<void> syncDirectorTopic(
     String? organizationId, {
     required bool enabled,
   }) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_directorTopicEnabledKey, enabled);
     if (organizationId == null || organizationId.trim().isEmpty) return;
     final topic = directorTopicForOrganization(organizationId);
     if (enabled) {
@@ -387,8 +401,19 @@ class NotificationService {
   }
 
   Future<void> unsubscribeFromOrganizationTopic(String? organizationId) async {
+    final prefs = await SharedPreferences.getInstance();
     await _messaging.unsubscribeFromTopic('announcements');
+    await prefs.remove(_organizationTopicKey);
+    await prefs.remove(_directorTopicEnabledKey);
     if (organizationId == null || organizationId.trim().isEmpty) return;
     await _messaging.unsubscribeFromTopic(topicForOrganization(organizationId));
+  }
+
+  Future<void> _restoreTopicSubscriptions() async {
+    final prefs = await SharedPreferences.getInstance();
+    final organizationId = prefs.getString(_organizationTopicKey);
+    final directorEnabled = prefs.getBool(_directorTopicEnabledKey) ?? false;
+    await syncOrganizationTopic(organizationId);
+    await syncDirectorTopic(organizationId, enabled: directorEnabled);
   }
 }

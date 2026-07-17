@@ -1,9 +1,7 @@
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 
-import '../services/auth_service.dart';
 import 'admin_create_announcement_screen.dart';
-import 'admin_entry_screen.dart';
 import 'admin_manage_announcements_screen.dart';
 import 'admin_profile_screen.dart';
 import 'admin_push_notifications_screen.dart';
@@ -20,15 +18,9 @@ class AdminDashboardScreen extends StatefulWidget {
 }
 
 class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
-  final _authService = AuthService();
-
-  Future<void> _signOut() async {
-    await _authService.signOut();
+  Future<void> _exitPanel() async {
     if (!mounted) return;
-    Navigator.of(context).pushAndRemoveUntil(
-      MaterialPageRoute(builder: (_) => const AdminEntryScreen()),
-      (route) => false,
-    );
+    Navigator.of(context).maybePop();
   }
 
   @override
@@ -56,9 +48,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
             icon: const Icon(Icons.settings_rounded),
           ),
           IconButton(
-            tooltip: 'Sign out',
-            onPressed: _signOut,
-            icon: const Icon(Icons.logout_rounded),
+            tooltip: 'Exit',
+            onPressed: _exitPanel,
+            icon: const Icon(Icons.close_rounded),
           ),
         ],
       ),
@@ -121,7 +113,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
             _ActionTile(
               icon: Icons.devices_rounded,
               title: 'Connected devices',
-              subtitle: 'Approve, rename, disable, or delete devices.',
+              subtitle: 'Rename, disable, or delete devices.',
               onTap: () {
                 Navigator.of(context).push(
                   MaterialPageRoute(

@@ -396,11 +396,39 @@ async function photoUrlForUid(uid) {
   }
 }
 
+async function organizationDeviceTokens(organizationId, options = {}) {
+  const snapshot = await admin.firestore()
+    .collection('devices')
+    .where('organizationId', '==', organizationId || DEFAULT_ORGANIZATION_ID)
+    .get();
+  const excludeOwnerUid = String(options.excludeOwnerUid || '').trim();
+  const tokens = [];
+  for (const doc of snapshot.docs) {
+    const data = doc.data() || {};
+    if (data.isDisabled === true) continue;
+    if (data.notificationsEnabled === false) continue;
+    if (excludeOwnerUid && String(data.ownerUid || '').trim() === excludeOwnerUid) {
+      continue;
+    }
+    const token = String(data.fcmToken || '').trim();
+    if (!token) continue;
+    tokens.push(token);
+  }
+  return [...new Set(tokens)];
+}
+
 async function sendSongDeliveryPush(deliveryId, delivery, event) {
   const primarySong = delivery.primarySong;
   const secondarySong = delivery.secondarySong || null;
-  const messageId = await admin.messaging().send({
-    topic: delivery.organizationTopic || topicForOrganization(delivery.organizationId),
+  const notificationTitle = String(delivery.senderName || 'Your Director');
+  const notificationBody = secondarySong
+    ? `${String(delivery.title || 'Songs are ready')}: ${String(primarySong.fileName)} • Then: ${String(secondarySong.fileName)}`
+    : `${String(delivery.title || 'Songs are ready')}: ${String(primarySong.fileName)}`;
+  const message = {
+    notification: {
+      title: notificationTitle,
+      body: notificationBody,
+    },
     data: {
       type: 'song_delivery',
       event,
@@ -415,7 +443,45 @@ async function sendSongDeliveryPush(deliveryId, delivery, event) {
       secondaryName: String(secondarySong?.fileName || ''),
       secondaryMime: String(secondarySong?.mimeType || ''),
     },
-    android: { priority: 'high' },
+    android: {
+      priority: 'high',
+      notification: {
+        channelId: 'noti_silent',
+      },
+    },
+  };
+  const tokens = await organizationDeviceTokens(delivery.organizationId, {
+    excludeOwnerUid: delivery.requestedByUid,
+  });
+  let messageId = '';
+  if (tokens.length > 0) {
+    const response = await admin.messaging().sendEachForMulticast({
+      tokens,
+      ...message,
+    });
+    const failures = response.responses
+      .map((item, index) => ({ item, token: tokens[index] }))
+      .filter(({ item }) => !item.success);
+    if (failures.length > 0) {
+      logger.warn('Some song delivery pushes failed', {
+        deliveryId,
+        failures: failures.map(({ item }) => item.error?.message || 'unknown'),
+        attempted: tokens.length,
+      });
+    }
+    messageId = response.responses.find((item) => item.success)?.messageId || '';
+  } else {
+    messageId = await admin.messaging().send({
+      topic: delivery.organizationTopic || topicForOrganization(delivery.organizationId),
+      ...message,
+    });
+  }
+  logger.info('Song delivery push sent', {
+    deliveryId,
+    event,
+    topic: delivery.organizationTopic || topicForOrganization(delivery.organizationId),
+    messageId,
+    targetedDevices: tokens.length,
   });
   return messageId;
 }
@@ -436,6 +502,12 @@ function correctionWindowFor(now) {
 async function sendAnnouncementPush(announcementId, announcement, event) {
   return admin.messaging().send({
     topic: topicForOrganization(announcement.organizationId),
+    notification: event === 'withdrawn'
+      ? undefined
+      : {
+          title: String(announcement.title || 'Noti'),
+          body: String(announcement.message || ''),
+        },
     data: {
       type: event === 'withdrawn' ? 'announcement_withdrawn' : 'announcement',
       event,
@@ -444,13 +516,24 @@ async function sendAnnouncementPush(announcementId, announcement, event) {
       message: String(announcement.message || ''),
       authorPhotoUrl: String(announcement.authorPhotoUrl || ''),
     },
-    android: { priority: 'high' },
+    android: {
+      priority: 'high',
+      notification: event === 'withdrawn'
+        ? undefined
+        : {
+            channelId: 'noti_silent',
+          },
+    },
   });
 }
 
 async function sendCustomBroadcastPush(notificationId, notification, event) {
   return admin.messaging().send({
     topic: notification.organizationTopic || topicForOrganization(notification.organizationId),
+    notification: {
+      title: String(notification.title),
+      body: String(notification.message),
+    },
     data: {
       type: 'custom_notification',
       event,
@@ -459,7 +542,12 @@ async function sendCustomBroadcastPush(notificationId, notification, event) {
       message: String(notification.message),
       senderPhotoUrl: String(notification.senderPhotoUrl || ''),
     },
-    android: { priority: 'high' },
+    android: {
+      priority: 'high',
+      notification: {
+        channelId: 'noti_silent',
+      },
+    },
   });
 }
 
