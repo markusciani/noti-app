@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
 import '../models/announcement.dart';
@@ -14,6 +15,7 @@ import '../services/auth_service.dart';
 import '../widgets/adaptive_page_body.dart';
 import 'announcement_detail_screen.dart';
 import '../services/music_directory_service.dart';
+import '../services/song_delivery_service.dart';
 import 'music_folder_screen.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -26,6 +28,7 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   final FirestoreService _firestoreService = FirestoreService();
   final DeviceService _deviceService = DeviceService();
+  final SongDeliveryService _songDeliveryService = SongDeliveryService();
   final TextEditingController _searchController = TextEditingController();
 
   String _query = '';
@@ -34,8 +37,13 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _directorRole = false;
   bool _secureDirectorTablet = false;
   bool _deviceDisabled = false;
+  bool _songDeliveryListenerActive = false;
+  String _songDeliveryListenerStatus = 'Starting song delivery listener...';
+  bool _hasFcmToken = false;
+  String _notificationPermissionStatus = 'unknown';
   StreamSubscription? _deviceSubscription;
   StreamSubscription<Map<String, dynamic>>? _notificationOpenSubscription;
+  StreamSubscription? _songDeliverySubscription;
   DateTime? _lastTitleTap;
   int _titleTapCount = 0;
 
@@ -52,6 +60,7 @@ class _HomeScreenState extends State<HomeScreen> {
     if (_registeredDevice) return;
     _registeredDevice = true;
     try {
+      await NotificationService().ensurePushReady(forceRefresh: true);
       final secureDirectorTablet = await AuthService()
           .hasSecureDeviceCredential();
       final authService = AuthService();
@@ -92,6 +101,8 @@ class _HomeScreenState extends State<HomeScreen> {
       await _deviceService.updatePresence();
       await _watchDeviceApproval();
       await _syncNotifications();
+      await _syncSongDeliveryInbox();
+      await _refreshLocalDiagnostics();
       final showStaffEntry = await _deviceService.staffAccessEnabled();
       final directorRole =
           await authService.currentStaffRole() == StaffRole.director;
@@ -108,6 +119,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _showVersionDialog() async {
+    await _refreshLocalDiagnostics();
     final info = await PackageInfo.fromPlatform();
     if (!mounted) return;
     final roleLabel = _directorRole || _showStaffEntry || _secureDirectorTablet
@@ -150,6 +162,18 @@ class _HomeScreenState extends State<HomeScreen> {
                 style: Theme.of(
                   context,
                 ).textTheme.labelLarge?.copyWith(fontWeight: FontWeight.w700),
+              ),
+            ),
+            const SizedBox(height: 8),
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.settings_input_antenna_rounded),
+              title: const Text('This tablet diagnostics'),
+              subtitle: Text(
+                'Notifications: $_notificationPermissionStatus\n'
+                'FCM token: ${_hasFcmToken ? 'available' : 'missing'}\n'
+                'Song listener: ${_songDeliveryListenerActive ? 'active' : 'inactive'}\n'
+                'Status: $_songDeliveryListenerStatus',
               ),
             ),
           ],
@@ -231,17 +255,90 @@ class _HomeScreenState extends State<HomeScreen> {
         });
       }
       unawaited(_syncNotifications());
+      unawaited(_syncSongDeliveryInbox());
     });
   }
 
   Future<void> _syncNotifications() async {
     final organizationId = await _deviceService.approvedOrganizationId();
+    await NotificationService().ensurePushReady(forceRefresh: true);
     await NotificationService().syncOrganizationTopic(organizationId);
     final directorEnabled = _directorRole || _secureDirectorTablet;
     await NotificationService().syncDirectorTopic(
       organizationId,
       enabled: directorEnabled,
     );
+  }
+
+  Future<void> _syncSongDeliveryInbox() async {
+    final organizationId = await _deviceService.approvedOrganizationId();
+    await _songDeliverySubscription?.cancel();
+    if (organizationId == null || organizationId.isEmpty) {
+      _songDeliveryListenerActive = false;
+      _songDeliveryListenerStatus = 'No organization is assigned to this tablet.';
+      if (mounted) setState(() {});
+      await _deviceService.syncNotificationDiagnostics(
+        songDeliveryListenerActive: _songDeliveryListenerActive,
+        songDeliveryListenerStatus: _songDeliveryListenerStatus,
+      );
+      await _refreshLocalDiagnostics();
+      return;
+    }
+    _songDeliveryListenerActive = true;
+    _songDeliveryListenerStatus = 'Listening for new song deliveries.';
+    if (mounted) setState(() {});
+    await _deviceService.syncNotificationDiagnostics(
+      songDeliveryListenerActive: _songDeliveryListenerActive,
+      songDeliveryListenerStatus: _songDeliveryListenerStatus,
+    );
+    await _refreshLocalDiagnostics();
+    _songDeliverySubscription = _songDeliveryService
+        .watchIncomingDeliveries(organizationId: organizationId)
+        .listen(
+          (deliveries) async {
+            final currentUid = FirebaseAuth.instance.currentUser?.uid ?? '';
+            for (final delivery in deliveries) {
+              if (delivery.requestedByUid == currentUid) continue;
+              await NotificationService().showSongDeliveryPayload({
+                'type': 'song_delivery',
+                'deliveryId': delivery.id,
+                'title': delivery.title,
+                'senderName': delivery.senderName,
+                'primaryPath': delivery.primarySong.relativePath,
+                'primaryName': delivery.primarySong.fileName,
+                'primaryMime': delivery.primarySong.mimeType,
+                'secondaryPath': delivery.secondarySong?.relativePath ?? '',
+                'secondaryName': delivery.secondarySong?.fileName ?? '',
+                'secondaryMime': delivery.secondarySong?.mimeType ?? '',
+                'version': delivery.version.toString(),
+              });
+            }
+          },
+          onError: (Object error) async {
+            _songDeliveryListenerActive = false;
+            _songDeliveryListenerStatus =
+                'Song listener error: ${error.toString()}';
+            if (mounted) setState(() {});
+            await _deviceService.syncNotificationDiagnostics(
+              songDeliveryListenerActive: _songDeliveryListenerActive,
+              songDeliveryListenerStatus: _songDeliveryListenerStatus,
+            );
+            await _refreshLocalDiagnostics();
+          },
+        );
+  }
+
+  Future<void> _refreshLocalDiagnostics() async {
+    final diagnostics = await _deviceService.currentNotificationDiagnostics(
+      songDeliveryListenerActive: _songDeliveryListenerActive,
+      songDeliveryListenerStatus: _songDeliveryListenerStatus,
+    );
+    if (!mounted) return;
+    setState(() {
+      _hasFcmToken = diagnostics['hasFcmToken'] as bool? ?? false;
+      _notificationPermissionStatus =
+          diagnostics['notificationPermissionStatus'] as String? ?? 'unknown';
+    });
   }
 
   void _handleOpenedNotification(Map<String, dynamic> data) {
@@ -255,6 +352,7 @@ class _HomeScreenState extends State<HomeScreen> {
     _searchController.dispose();
     _deviceSubscription?.cancel();
     _notificationOpenSubscription?.cancel();
+    _songDeliverySubscription?.cancel();
     super.dispose();
   }
 

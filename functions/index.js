@@ -111,6 +111,28 @@ exports.renameDevice = onCall(
   },
 );
 
+exports.listDevices = onCall(
+  { region: 'us-central1', invoker: 'public' },
+  async (request) => {
+    await requireAdmin(request);
+    const snapshot = await admin.firestore()
+      .collection('devices')
+      .orderBy('lastSeenAt', 'desc')
+      .get();
+    const devices = snapshot.docs.map((doc) => {
+      const data = doc.data() || {};
+      return {
+        id: doc.id,
+        ...data,
+        firstSeenAt: data.firstSeenAt?.toDate?.()?.toISOString?.() || null,
+        lastSeenAt: data.lastSeenAt?.toDate?.()?.toISOString?.() || null,
+        diagnosticsUpdatedAt: data.diagnosticsUpdatedAt?.toDate?.()?.toISOString?.() || null,
+      };
+    });
+    return { devices };
+  },
+);
+
 exports.rotateOrganizationPin = onCall(
   { region: 'us-central1', invoker: 'public' },
   async (request) => {
@@ -406,7 +428,6 @@ async function organizationDeviceTokens(organizationId, options = {}) {
   for (const doc of snapshot.docs) {
     const data = doc.data() || {};
     if (data.isDisabled === true) continue;
-    if (data.notificationsEnabled === false) continue;
     if (excludeOwnerUid && String(data.ownerUid || '').trim() === excludeOwnerUid) {
       continue;
     }

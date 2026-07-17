@@ -67,7 +67,9 @@ service cloud.firestore {
             'appVersion',
             'buildNumber',
             'fcmToken',
+            'hasFcmToken',
             'notificationsEnabled',
+            'notificationPermissionStatus',
             'minimumSupportedVersion',
             'isOutdated',
             'lastSeenAt',
@@ -80,6 +82,9 @@ service cloud.firestore {
             'deviceNumber',
             'deviceType',
             'staffAccessRequested',
+            'songDeliveryListenerActive',
+            'songDeliveryListenerStatus',
+            'diagnosticsUpdatedAt',
           ])
         );
       allow delete: if isAdmin();
@@ -124,8 +129,7 @@ service cloud.firestore {
     // Song deliveries are created, edited, and withdrawn through trusted
     // Cloud Functions so the five-minute correction window is server-enforced.
     match /song_deliveries/{deliveryId} {
-      allow get, list: if isStaff()
-        && (isAdmin() || resource.data.requestedByUid == request.auth.uid);
+      allow get, list: if isSignedIn();
       allow create, update, delete: if false;
     }
 

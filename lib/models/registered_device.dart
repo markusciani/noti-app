@@ -24,6 +24,9 @@ class RegisteredDevice {
     required this.lastName,
     required this.deviceNumber,
     required this.staffAccessRequested,
+    required this.notificationPermissionStatus,
+    required this.songDeliveryListenerActive,
+    required this.songDeliveryListenerStatus,
   });
 
   final String id;
@@ -48,6 +51,9 @@ class RegisteredDevice {
   final String lastName;
   final String deviceNumber;
   final bool staffAccessRequested;
+  final String notificationPermissionStatus;
+  final bool songDeliveryListenerActive;
+  final String songDeliveryListenerStatus;
 
   bool get isApproved => joinStatus == 'approved';
 
@@ -84,6 +90,57 @@ class RegisteredDevice {
       lastName: data['lastName'] ?? '',
       deviceNumber: data['deviceNumber'] ?? '',
       staffAccessRequested: data['staffAccessRequested'] as bool? ?? false,
+      notificationPermissionStatus:
+          data['notificationPermissionStatus'] as String? ?? 'unknown',
+      songDeliveryListenerActive:
+          data['songDeliveryListenerActive'] as bool? ?? false,
+      songDeliveryListenerStatus:
+          data['songDeliveryListenerStatus'] as String? ?? '',
+    );
+  }
+
+  factory RegisteredDevice.fromMap(Map<String, dynamic> data) {
+    DateTime parseDate(dynamic value) {
+      if (value is Timestamp) return value.toDate();
+      if (value is DateTime) return value;
+      if (value is String && value.isNotEmpty) {
+        return DateTime.tryParse(value) ?? DateTime.fromMillisecondsSinceEpoch(0);
+      }
+      return DateTime.fromMillisecondsSinceEpoch(0);
+    }
+
+    return RegisteredDevice(
+      id: data['id'] as String? ?? '',
+      deviceName: data['deviceName'] as String? ?? 'Unknown device',
+      manufacturer: data['manufacturer'] as String? ?? '',
+      model: data['model'] as String? ?? '',
+      platformVersion: data['platformVersion'] as String? ?? '',
+      appVersion: data['appVersion'] as String? ?? '',
+      fcmToken: data['fcmToken'] as String? ?? '',
+      firstSeenAt: parseDate(data['firstSeenAt']),
+      lastSeenAt: parseDate(data['lastSeenAt']),
+      notificationsEnabled: data['notificationsEnabled'] as bool? ?? false,
+      isDisabled: data['isDisabled'] as bool? ?? false,
+      minimumSupportedVersion: data['minimumSupportedVersion'] as String? ?? '',
+      isOutdated: data['isOutdated'] as bool? ?? false,
+      organizationId: data['organizationId'] as String? ?? '',
+      organizationName: data['organizationName'] as String? ?? '',
+      joinStatus: data['joinStatus'] as String? ?? 'approved',
+      deviceType: data['deviceType'] as String? ?? 'unknown',
+      displayName:
+          data['displayName'] as String? ??
+          data['deviceName'] as String? ??
+          'Unknown device',
+      firstName: data['firstName'] as String? ?? '',
+      lastName: data['lastName'] as String? ?? '',
+      deviceNumber: data['deviceNumber'] as String? ?? '',
+      staffAccessRequested: data['staffAccessRequested'] as bool? ?? false,
+      notificationPermissionStatus:
+          data['notificationPermissionStatus'] as String? ?? 'unknown',
+      songDeliveryListenerActive:
+          data['songDeliveryListenerActive'] as bool? ?? false,
+      songDeliveryListenerStatus:
+          data['songDeliveryListenerStatus'] as String? ?? '',
     );
   }
 }

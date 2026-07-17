@@ -10,6 +10,9 @@ class SongDelivery {
     required this.primarySong,
     required this.secondarySong,
     required this.status,
+    required this.organizationId,
+    required this.requestedByUid,
+    required this.version,
     required this.createdAt,
     required this.correctionWindowEndsAt,
   });
@@ -20,6 +23,9 @@ class SongDelivery {
   final SongFile primarySong;
   final SongFile? secondarySong;
   final String status;
+  final String organizationId;
+  final String requestedByUid;
+  final int version;
   final DateTime? createdAt;
   final DateTime? correctionWindowEndsAt;
 
@@ -46,6 +52,9 @@ class SongDelivery {
           ? SongFile.fromMap(Map<String, dynamic>.from(secondary))
           : null,
       status: data['status'] as String? ?? 'active',
+      organizationId: data['organizationId'] as String? ?? '',
+      requestedByUid: data['requestedByUid'] as String? ?? '',
+      version: (data['version'] as num?)?.toInt() ?? 1,
       createdAt: (data['createdAt'] as Timestamp?)?.toDate(),
       correctionWindowEndsAt: (data['correctionWindowEndsAt'] as Timestamp?)
           ?.toDate(),

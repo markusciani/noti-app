@@ -26,6 +26,7 @@ class NotificationService {
       StreamController<Map<String, dynamic>>.broadcast();
   static const _organizationTopicKey = 'noti_notification_org_id';
   static const _directorTopicEnabledKey = 'noti_notification_director_enabled';
+  static const _songDeliverySeenPrefix = 'noti_song_delivery_seen_';
 
   static const AndroidNotificationChannel _channel = AndroidNotificationChannel(
     'noti_silent',
@@ -41,7 +42,7 @@ class NotificationService {
 
   Future<void> initialize() async {
     await _initializeLocalNotifications();
-    await _messaging.requestPermission(alert: true, badge: true, sound: false);
+    await ensurePushReady();
 
     FirebaseMessaging.onMessage.listen(_showMessage);
     FirebaseMessaging.onMessageOpenedApp.listen(_handleMessageOpen);
@@ -51,6 +52,23 @@ class NotificationService {
     await _messaging.getInitialMessage().then((message) {
       if (message != null) _handleMessageOpen(message);
     });
+  }
+
+  Future<String?> ensurePushReady({bool forceRefresh = false}) async {
+    await _messaging.setAutoInitEnabled(true);
+    await _messaging.requestPermission(alert: true, badge: true, sound: false);
+
+    var token = await _messaging.getToken();
+    if ((token == null || token.isEmpty) && forceRefresh) {
+      try {
+        await _messaging.deleteToken();
+      } catch (_) {
+        // Some platforms will not have a token to delete yet.
+      }
+      token = await _messaging.getToken();
+    }
+
+    return token;
   }
 
   /// Called from the top-level FCM background handler after Firebase is ready.
@@ -109,6 +127,7 @@ class NotificationService {
       final deliveryId = data['deliveryId'];
       if (deliveryId != null && deliveryId.isNotEmpty) {
         await _localNotifications.cancel(_notificationId(deliveryId));
+        await _clearSongDeliverySeen(deliveryId);
       }
       return;
     }
@@ -130,7 +149,7 @@ class NotificationService {
     }
 
     if (data['type'] == 'song_delivery') {
-      await _showSongDelivery(data);
+      await showSongDeliveryPayload(data);
       return;
     }
 
@@ -168,6 +187,11 @@ class NotificationService {
         ),
       ),
     );
+  }
+
+  Future<void> showSongDeliveryPayload(Map<String, dynamic> data) async {
+    if (!await _shouldShowSongDelivery(data)) return;
+    await _showSongDelivery(data);
   }
 
   Future<void> _showSongDelivery(Map<String, dynamic> data) async {
@@ -381,8 +405,10 @@ class NotificationService {
       return;
     }
     final normalizedOrganizationId = organizationId.trim();
-    await _messaging.subscribeToTopic(topicForOrganization(normalizedOrganizationId));
     await prefs.setString(_organizationTopicKey, normalizedOrganizationId);
+    final token = await ensurePushReady();
+    if (token == null || token.isEmpty) return;
+    await _messaging.subscribeToTopic(topicForOrganization(normalizedOrganizationId));
   }
 
   Future<void> syncDirectorTopic(
@@ -392,6 +418,8 @@ class NotificationService {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_directorTopicEnabledKey, enabled);
     if (organizationId == null || organizationId.trim().isEmpty) return;
+    final token = await ensurePushReady();
+    if (token == null || token.isEmpty) return;
     final topic = directorTopicForOrganization(organizationId);
     if (enabled) {
       await _messaging.subscribeToTopic(topic);
@@ -415,5 +443,23 @@ class NotificationService {
     final directorEnabled = prefs.getBool(_directorTopicEnabledKey) ?? false;
     await syncOrganizationTopic(organizationId);
     await syncDirectorTopic(organizationId, enabled: directorEnabled);
+  }
+
+  Future<bool> _shouldShowSongDelivery(Map<String, dynamic> data) async {
+    final deliveryId = data['deliveryId']?.toString().trim() ?? '';
+    if (deliveryId.isEmpty) return false;
+    final version = data['version']?.toString().trim();
+    final marker = version == null || version.isEmpty ? '1' : version;
+    final prefs = await SharedPreferences.getInstance();
+    final key = '$_songDeliverySeenPrefix$deliveryId';
+    final previous = prefs.getString(key);
+    if (previous == marker) return false;
+    await prefs.setString(key, marker);
+    return true;
+  }
+
+  Future<void> _clearSongDeliverySeen(String deliveryId) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('$_songDeliverySeenPrefix$deliveryId');
   }
 }

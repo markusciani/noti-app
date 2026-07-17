@@ -2,6 +2,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/foundation.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -9,6 +10,7 @@ import 'package:uuid/uuid.dart';
 
 import '../models/device_registration.dart';
 import '../models/organization.dart';
+import '../models/registered_device.dart';
 
 class DeviceService {
   DeviceService({
@@ -25,10 +27,22 @@ class DeviceService {
   final FirebaseMessaging _messaging;
   final FirebaseAuth _auth;
   final DeviceInfoPlugin _deviceInfo;
+  final FirebaseFunctions _functions = FirebaseFunctions.instanceFor(
+    region: 'us-central1',
+  );
 
   static const _deviceIdKey = 'noti_device_id';
   static const _staffAccessKey = 'noti_staff_access';
   static const _collection = 'devices';
+
+  String _authorizationStatusLabel(AuthorizationStatus status) => switch (
+    status
+  ) {
+    AuthorizationStatus.authorized => 'authorized',
+    AuthorizationStatus.provisional => 'provisional',
+    AuthorizationStatus.denied => 'denied',
+    AuthorizationStatus.notDetermined => 'not_determined',
+  };
 
   Future<String> _ensureDeviceOwner() async {
     var user = _auth.currentUser;
@@ -147,6 +161,9 @@ class DeviceService {
   Future<Map<String, dynamic>> _collectPlatformData() async {
     final packageInfo = await PackageInfo.fromPlatform();
     final permissionStatus = await _messaging.getNotificationSettings();
+    final permissionStatusLabel = _authorizationStatusLabel(
+      permissionStatus.authorizationStatus,
+    );
     final messagingEnabled =
         permissionStatus.authorizationStatus ==
             AuthorizationStatus.authorized ||
@@ -163,7 +180,9 @@ class DeviceService {
         'appVersion': packageInfo.version,
         'buildNumber': packageInfo.buildNumber,
         'fcmToken': token,
+        'hasFcmToken': token.isNotEmpty,
         'notificationsEnabled': messagingEnabled,
+        'notificationPermissionStatus': permissionStatusLabel,
         'minimumSupportedVersion': minimumSupportedVersion,
         'isOutdated': _isVersionOutdated(
           packageInfo.version,
@@ -183,7 +202,9 @@ class DeviceService {
           'appVersion': packageInfo.version,
           'buildNumber': packageInfo.buildNumber,
           'fcmToken': token,
+          'hasFcmToken': token.isNotEmpty,
           'notificationsEnabled': messagingEnabled,
+          'notificationPermissionStatus': permissionStatusLabel,
           'minimumSupportedVersion': minimumSupportedVersion,
           'isOutdated': _isVersionOutdated(
             packageInfo.version,
@@ -200,7 +221,9 @@ class DeviceService {
           'appVersion': packageInfo.version,
           'buildNumber': packageInfo.buildNumber,
           'fcmToken': token,
+          'hasFcmToken': token.isNotEmpty,
           'notificationsEnabled': messagingEnabled,
+          'notificationPermissionStatus': permissionStatusLabel,
           'minimumSupportedVersion': minimumSupportedVersion,
           'isOutdated': _isVersionOutdated(
             packageInfo.version,
@@ -217,7 +240,9 @@ class DeviceService {
           'appVersion': packageInfo.version,
           'buildNumber': packageInfo.buildNumber,
           'fcmToken': token,
+          'hasFcmToken': token.isNotEmpty,
           'notificationsEnabled': messagingEnabled,
+          'notificationPermissionStatus': permissionStatusLabel,
           'minimumSupportedVersion': minimumSupportedVersion,
           'isOutdated': _isVersionOutdated(
             packageInfo.version,
@@ -235,7 +260,9 @@ class DeviceService {
           'appVersion': packageInfo.version,
           'buildNumber': packageInfo.buildNumber,
           'fcmToken': token,
+          'hasFcmToken': token.isNotEmpty,
           'notificationsEnabled': messagingEnabled,
+          'notificationPermissionStatus': permissionStatusLabel,
           'minimumSupportedVersion': minimumSupportedVersion,
           'isOutdated': _isVersionOutdated(
             packageInfo.version,
@@ -325,6 +352,8 @@ class DeviceService {
       'lastName': '',
       'deviceNumber': deviceNumber,
       'staffAccessRequested': staffAccessRequested,
+      'songDeliveryListenerActive': false,
+      'songDeliveryListenerStatus': 'Waiting for the home feed to start.',
     }, SetOptions(merge: true));
   }
 
@@ -350,6 +379,44 @@ class DeviceService {
     }, SetOptions(merge: true));
   }
 
+  Future<Map<String, dynamic>> currentNotificationDiagnostics({
+    required bool songDeliveryListenerActive,
+    required String songDeliveryListenerStatus,
+  }) async {
+    final permissionStatus = await _messaging.getNotificationSettings();
+    final token = await _messaging.getToken() ?? '';
+    return {
+      'notificationPermissionStatus': _authorizationStatusLabel(
+        permissionStatus.authorizationStatus,
+      ),
+      'notificationsEnabled':
+          permissionStatus.authorizationStatus == AuthorizationStatus.authorized ||
+          permissionStatus.authorizationStatus ==
+              AuthorizationStatus.provisional,
+      'fcmToken': token,
+      'hasFcmToken': token.isNotEmpty,
+      'songDeliveryListenerActive': songDeliveryListenerActive,
+      'songDeliveryListenerStatus': songDeliveryListenerStatus,
+    };
+  }
+
+  Future<void> syncNotificationDiagnostics({
+    required bool songDeliveryListenerActive,
+    required String songDeliveryListenerStatus,
+  }) async {
+    final prefs = await SharedPreferences.getInstance();
+    final deviceId = prefs.getString(_deviceIdKey);
+    if (deviceId == null || deviceId.isEmpty) return;
+    final diagnostics = await currentNotificationDiagnostics(
+      songDeliveryListenerActive: songDeliveryListenerActive,
+      songDeliveryListenerStatus: songDeliveryListenerStatus,
+    );
+    await _firestore.collection(_collection).doc(deviceId).set({
+      ...diagnostics,
+      'diagnosticsUpdatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+  }
+
   Stream<DocumentSnapshot<Map<String, dynamic>>> watchCurrentDevice() async* {
     final prefs = await SharedPreferences.getInstance();
     final deviceId = prefs.getString(_deviceIdKey);
@@ -365,6 +432,22 @@ class DeviceService {
         .collection(_collection)
         .orderBy('lastSeenAt', descending: true)
         .snapshots();
+  }
+
+  Future<List<RegisteredDevice>> fetchDevicesForDashboard() async {
+    final user = _auth.currentUser;
+    if (user == null) {
+      throw StateError('Sign in as a director first.');
+    }
+    await user.getIdToken(true);
+    final result = await _functions
+        .httpsCallable('listDevices')
+        .call<Map<String, dynamic>>();
+    final devices = (result.data['devices'] as List? ?? const [])
+        .whereType<Map>()
+        .map((item) => RegisteredDevice.fromMap(Map<String, dynamic>.from(item)))
+        .toList(growable: false);
+    return devices;
   }
 
   Future<void> deleteDevice(String id) async {

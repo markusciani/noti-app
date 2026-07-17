@@ -76,6 +76,28 @@ class SongDeliveryService {
         );
   }
 
+  Stream<List<SongDelivery>> watchIncomingDeliveries({
+    required String organizationId,
+  }) {
+    return _firestore
+        .collection('song_deliveries')
+        .orderBy('createdAt', descending: true)
+        .limit(20)
+        .snapshots()
+        .map(
+          (snapshot) => snapshot.docs
+              .map(SongDelivery.fromFirestore)
+              .where(
+                (delivery) =>
+                    delivery.status == 'active' &&
+                    (delivery.organizationId == organizationId ||
+                        (organizationId == 'maranatha-romanian-church' &&
+                            delivery.organizationId.isEmpty)),
+              )
+              .toList(growable: false),
+        );
+  }
+
   Future<void> _call(String name, Map<String, dynamic> data) async {
     final user = _auth.currentUser;
     if (user == null) {

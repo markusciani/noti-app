@@ -1,4 +1,3 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
 import '../models/registered_device.dart';
@@ -6,8 +5,34 @@ import '../services/device_service.dart';
 import '../services/organization_service.dart';
 import '../widgets/adaptive_page_body.dart';
 
-class DeviceDashboardScreen extends StatelessWidget {
+class DeviceDashboardScreen extends StatefulWidget {
   const DeviceDashboardScreen({super.key});
+
+  @override
+  State<DeviceDashboardScreen> createState() => _DeviceDashboardScreenState();
+}
+
+class _DeviceDashboardScreenState extends State<DeviceDashboardScreen> {
+  final DeviceService _deviceService = DeviceService();
+  final OrganizationService _organizationService = OrganizationService();
+
+  late Future<List<RegisteredDevice>> _devicesFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _devicesFuture = _deviceService.fetchDevicesForDashboard();
+  }
+
+  Future<void> _reload() async {
+    final future = _deviceService.fetchDevicesForDashboard();
+    if (mounted) {
+      setState(() {
+        _devicesFuture = future;
+      });
+    }
+    await future;
+  }
 
   String _formatRelative(DateTime date) {
     final now = DateTime.now();
@@ -25,11 +50,7 @@ class DeviceDashboardScreen extends StatelessWidget {
         date.day == now.day;
   }
 
-  Future<void> _renameDevice(
-    BuildContext context,
-    RegisteredDevice device,
-    OrganizationService organizationService,
-  ) async {
+  Future<void> _renameDevice(RegisteredDevice device) async {
     final numberController = TextEditingController(text: device.deviceNumber);
     var deviceType = device.deviceType;
     final result = await showDialog<bool>(
@@ -54,7 +75,9 @@ class DeviceDashboardScreen extends StatelessWidget {
                     )
                     .toList(),
                 onChanged: (value) {
-                  if (value != null) setDialogState(() => deviceType = value);
+                  if (value != null) {
+                    setDialogState(() => deviceType = value);
+                  }
                 },
               ),
               const SizedBox(height: 12),
@@ -86,48 +109,55 @@ class DeviceDashboardScreen extends StatelessWidget {
       return;
     }
     try {
-      await organizationService.updateDeviceProfile(
+      await _organizationService.updateDeviceProfile(
         deviceId: device.id,
         deviceType: deviceType,
         displayName: 'Maranatha ${numberController.text.trim()}',
         deviceNumber: numberController.text,
       );
+      await _reload();
     } finally {
       numberController.dispose();
     }
   }
 
+  Future<void> _setDeviceDisabled(RegisteredDevice device) async {
+    await _deviceService.setDeviceDisabled(device.id, !device.isDisabled);
+    await _reload();
+  }
+
+  Future<void> _deleteDevice(RegisteredDevice device) async {
+    await _deviceService.deleteDevice(device.id);
+    await _reload();
+  }
+
   @override
   Widget build(BuildContext context) {
-    final deviceService = DeviceService();
-    final organizationService = OrganizationService();
     final colors = Theme.of(context).colorScheme;
 
     return Scaffold(
       appBar: AppBar(title: const Text('Connected Devices')),
-      body: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-        stream: deviceService.watchDevices(),
+      body: FutureBuilder<List<RegisteredDevice>>(
+        future: _devicesFuture,
         builder: (context, snapshot) {
           if (snapshot.hasError) {
             return Center(child: Text('Error: ${snapshot.error}'));
           }
 
-          final docs = snapshot.data?.docs ?? const [];
-          final devices = docs.map(RegisteredDevice.fromFirestore).toList();
-
+          final devices = snapshot.data ?? const <RegisteredDevice>[];
           final totalDevices = devices.length;
-          final activeToday = devices
-              .where((d) => _isToday(d.lastSeenAt))
-              .length;
+          final activeToday = devices.where((d) => _isToday(d.lastSeenAt)).length;
           final notificationsDisabled = devices
               .where((d) => !d.notificationsEnabled)
               .length;
           final outdated = devices.where((d) => d.isOutdated).length;
+          final missingFcmToken = devices.where((d) => d.fcmToken.isEmpty).length;
+          final listenerInactive = devices
+              .where((d) => !d.songDeliveryListenerActive)
+              .length;
 
           return RefreshIndicator(
-            onRefresh: () async {
-              await deviceService.updatePresence();
-            },
+            onRefresh: _reload,
             child: AdaptivePageBody(
               maxWidth: 1080,
               child: ListView(
@@ -198,6 +228,24 @@ class DeviceDashboardScreen extends StatelessWidget {
                               color: colors.error,
                             ),
                           ),
+                          SizedBox(
+                            width: itemWidth,
+                            child: _MetricCard(
+                              label: 'Missing FCM token',
+                              value: '$missingFcmToken',
+                              icon: Icons.key_off_rounded,
+                              color: colors.primary,
+                            ),
+                          ),
+                          SizedBox(
+                            width: itemWidth,
+                            child: _MetricCard(
+                              label: 'Song listener inactive',
+                              value: '$listenerInactive',
+                              icon: Icons.sync_problem_rounded,
+                              color: colors.tertiary,
+                            ),
+                          ),
                         ],
                       );
                     },
@@ -221,12 +269,18 @@ class DeviceDashboardScreen extends StatelessWidget {
                     ],
                   ),
                   const SizedBox(height: 12),
-                  if (devices.isEmpty)
-                    _EmptyState(
+                  if (snapshot.connectionState == ConnectionState.waiting &&
+                      devices.isEmpty)
+                    const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 48),
+                      child: Center(child: CircularProgressIndicator()),
+                    )
+                  else if (devices.isEmpty)
+                    const _EmptyState(
                       icon: Icons.phonelink_off_rounded,
                       title: 'No devices registered yet',
                       message:
-                          'Once members open Noti, each install will appear here automatically.',
+                          'Open Noti on each tablet and keep it on the home page for a moment. Pull down here afterward to reload the connected devices list.',
                     )
                   else
                     ...devices.map(
@@ -235,25 +289,12 @@ class DeviceDashboardScreen extends StatelessWidget {
                         child: _DeviceTile(
                           device: device,
                           relativeTime: _formatRelative(device.lastSeenAt),
-                          onDisableToggle: () async {
-                            await deviceService.setDeviceDisabled(
-                              device.id,
-                              !device.isDisabled,
-                            );
-                          },
-                          onDelete: () async {
-                            await deviceService.deleteDevice(device.id);
-                          },
-                          onApprove: null,
-                          onRename: () => _renameDevice(
-                            context,
-                            device,
-                            organizationService,
-                          ),
+                          onDisableToggle: () => _setDeviceDisabled(device),
+                          onDelete: () => _deleteDevice(device),
+                          onRename: () => _renameDevice(device),
                         ),
                       ),
                     ),
-                  const SizedBox(height: 8),
                 ],
               ),
             ),
@@ -334,7 +375,6 @@ class _DeviceTile extends StatelessWidget {
     required this.relativeTime,
     required this.onDisableToggle,
     required this.onDelete,
-    required this.onApprove,
     required this.onRename,
   });
 
@@ -342,7 +382,6 @@ class _DeviceTile extends StatelessWidget {
   final String relativeTime;
   final VoidCallback onDisableToggle;
   final VoidCallback onDelete;
-  final VoidCallback? onApprove;
   final VoidCallback onRename;
 
   @override
@@ -388,6 +427,35 @@ class _DeviceTile extends StatelessWidget {
                 ),
               ),
             ),
+          if (device.fcmToken.isEmpty)
+            Card(
+              color: colors.errorContainer,
+              child: ListTile(
+                dense: true,
+                leading: Icon(Icons.key_off_rounded, color: colors.error),
+                title: const Text('FCM token is missing'),
+                subtitle: const Text(
+                  'Open Noti on this tablet and leave it on the home screen so Firebase can register push delivery.',
+                ),
+              ),
+            ),
+          if (!device.songDeliveryListenerActive)
+            Card(
+              color: colors.tertiaryContainer,
+              child: ListTile(
+                dense: true,
+                leading: Icon(
+                  Icons.sync_problem_rounded,
+                  color: colors.tertiary,
+                ),
+                title: const Text('Song listener is inactive'),
+                subtitle: Text(
+                  device.songDeliveryListenerStatus.isEmpty
+                      ? 'Open Noti on this tablet to restart the song delivery listener.'
+                      : device.songDeliveryListenerStatus,
+                ),
+              ),
+            ),
           _DetailRow(
             label: 'Organization',
             value: device.organizationName.isEmpty
@@ -413,6 +481,23 @@ class _DeviceTile extends StatelessWidget {
             label: 'Notifications',
             value: device.notificationsEnabled ? 'Enabled' : 'Off',
           ),
+          _DetailRow(
+            label: 'Permission',
+            value: device.notificationPermissionStatus,
+          ),
+          _DetailRow(
+            label: 'FCM token',
+            value: device.fcmToken.isEmpty ? 'Missing' : 'Available',
+          ),
+          _DetailRow(
+            label: 'Song listener',
+            value: device.songDeliveryListenerActive ? 'Active' : 'Inactive',
+          ),
+          if (device.songDeliveryListenerStatus.isNotEmpty)
+            _DetailRow(
+              label: 'Listener status',
+              value: device.songDeliveryListenerStatus,
+            ),
           _DetailRow(label: 'App version', value: device.appVersion),
           _DetailRow(label: 'Android', value: device.platformVersion),
           _DetailRow(label: 'Last seen', value: relativeTime),
@@ -432,14 +517,12 @@ class _DeviceTile extends StatelessWidget {
                 icon: const Icon(Icons.edit_rounded),
                 label: const Text('Rename'),
               ),
-              const SizedBox(width: 10),
               FilledButton.tonal(
                 onPressed: onDisableToggle,
                 child: Text(
                   device.isDisabled ? 'Enable device' : 'Disable device',
                 ),
               ),
-              const SizedBox(width: 10),
               OutlinedButton(
                 onPressed: onDelete,
                 style: OutlinedButton.styleFrom(
@@ -519,28 +602,30 @@ class _EmptyState extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 32),
-      child: Column(
-        children: [
-          Icon(icon, size: 64, color: Theme.of(context).colorScheme.primary),
-          const SizedBox(height: 12),
-          Text(
-            title,
-            style: Theme.of(
-              context,
-            ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800),
-            textAlign: TextAlign.center,
-          ),
-          const SizedBox(height: 8),
-          Text(
-            message,
-            textAlign: TextAlign.center,
-            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-              color: Theme.of(context).colorScheme.onSurfaceVariant,
+    final colors = Theme.of(context).colorScheme;
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(28),
+        child: Column(
+          children: [
+            Icon(icon, size: 42, color: colors.primary),
+            const SizedBox(height: 14),
+            Text(
+              title,
+              style: Theme.of(
+                context,
+              ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
             ),
-          ),
-        ],
+            const SizedBox(height: 8),
+            Text(
+              message,
+              textAlign: TextAlign.center,
+              style: Theme.of(
+                context,
+              ).textTheme.bodyMedium?.copyWith(color: colors.onSurfaceVariant),
+            ),
+          ],
+        ),
       ),
     );
   }
