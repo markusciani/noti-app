@@ -48,7 +48,6 @@ service cloud.firestore {
       allow create: if isSignedIn()
         && request.resource.data.ownerUid == request.auth.uid
         && request.resource.data.isDisabled == false
-        && request.resource.data.joinStatus == 'pending'
         && joinableOrganization(request.resource.data.organizationId);
       allow update: if isAdmin()
         || (
@@ -59,14 +58,6 @@ service cloud.firestore {
           && (
             request.resource.data.organizationId == resource.data.organizationId
             || resource.data.organizationId == null
-            || resource.data.joinStatus == 'rejected'
-          )
-          && (
-            request.resource.data.joinStatus == resource.data.joinStatus
-            || (
-              request.resource.data.joinStatus == 'pending'
-              && (resource.data.joinStatus == null || resource.data.joinStatus == 'rejected')
-            )
           )
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
             'deviceName',
@@ -81,6 +72,7 @@ service cloud.firestore {
             'isOutdated',
             'lastSeenAt',
             'id',
+            'joinStatus',
             'organizationName',
             'displayName',
             'firstName',

@@ -16,6 +16,10 @@ function topicForOrganization(organizationId) {
   return `org_${normalized || DEFAULT_ORGANIZATION_ID}`;
 }
 
+function directorTopicForOrganization(organizationId) {
+  return `${topicForOrganization(organizationId)}_directors`;
+}
+
 function hashOrganizationPin(pin) {
   return crypto.createHash('sha256').update(pin).digest('hex');
 }
@@ -320,22 +324,32 @@ exports.updateDirectorProfile = onCall(
     const staff = await requireDirector(request);
     const firstName = String(request.data?.firstName || '').trim();
     const photoUrl = String(request.data?.photoUrl || '').trim();
+    const photoBase64 = String(request.data?.photoBase64 || '').trim();
     if (!firstName || firstName.length > 40) {
       throw new HttpsError('invalid-argument', 'Provide a valid first name.');
     }
     if (photoUrl && (!photoUrl.startsWith('https://') || photoUrl.length > 2048)) {
       throw new HttpsError('invalid-argument', 'Provide a valid profile picture.');
     }
+    if (photoBase64 && photoBase64.length > 700000) {
+      throw new HttpsError(
+        'invalid-argument',
+        'The profile picture is too large. Choose a smaller image.',
+      );
+    }
 
     await admin.firestore().collection('users').doc(request.auth.uid).set({
       displayName: firstName,
       ...(photoUrl ? { photoURL: photoUrl } : {}),
+      ...(photoBase64 ? { photoBase64 } : {}),
+      photoUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     }, { merge: true });
     return {
       uid: request.auth.uid,
       firstName,
       photoUrl: photoUrl || String(staff.photoURL || ''),
+      photoBase64: photoBase64 || String(staff.photoBase64 || ''),
     };
   },
 );
@@ -817,6 +831,59 @@ exports.sendAnnouncementPush = onDocumentCreated(
     logger.info('Announcement push sent', {
       announcementId: event.params.announcementId,
       messageId,
+    });
+  },
+);
+
+exports.notifyDirectorsAboutPendingDevice = onDocumentCreated(
+  {
+    document: 'devices/{deviceId}',
+    region: 'us-central1',
+  },
+  async (event) => {
+    const snapshot = event.data;
+    if (!snapshot) return;
+
+    const device = snapshot.data() || {};
+    const joinStatus = String(device.joinStatus || 'pending');
+    const deviceType = String(device.deviceType || '').trim();
+    const isDisabled = device.isDisabled === true;
+    if (joinStatus !== 'pending' || deviceType === 'director_tablet' || isDisabled) {
+      return;
+    }
+
+    const organizationId = String(device.organizationId || DEFAULT_ORGANIZATION_ID);
+    const displayName = String(device.displayName || device.deviceName || 'New device').trim();
+    const model = String(`${device.manufacturer || ''} ${device.model || ''}`).trim();
+    const message = model
+      ? `${displayName} wants to join Noti. ${model}`
+      : `${displayName} wants to join Noti.`;
+
+    const messageId = await admin.messaging().send({
+      topic: directorTopicForOrganization(organizationId),
+      data: {
+        type: 'device_review',
+        deviceId: event.params.deviceId,
+        title: 'Device approval needed',
+        message,
+        displayName,
+        deviceType,
+      },
+      android: { priority: 'high' },
+    });
+
+    await snapshot.ref.set(
+      {
+        reviewNotificationSentAt: admin.firestore.FieldValue.serverTimestamp(),
+        reviewNotificationMessageId: messageId,
+      },
+      { merge: true },
+    );
+
+    logger.info('Director device review notification sent', {
+      deviceId: event.params.deviceId,
+      messageId,
+      organizationId,
     });
   },
 );

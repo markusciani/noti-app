@@ -135,6 +135,7 @@ class AuthService {
   Future<void> updateDirectorProfile({
     required String firstName,
     String? photoUrl,
+    String? photoBase64,
   }) async {
     final user = _auth.currentUser;
     if (user == null) {
@@ -147,6 +148,8 @@ class AuthService {
           'firstName': firstName.trim(),
           if (photoUrl != null && photoUrl.trim().isNotEmpty)
             'photoUrl': photoUrl.trim(),
+          if (photoBase64 != null && photoBase64.trim().isNotEmpty)
+            'photoBase64': photoBase64.trim(),
         });
     // Keep the current device session responsive. Firebase-backed profile
     // data remains authoritative for Cloud Functions and notifications.

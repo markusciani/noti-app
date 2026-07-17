@@ -21,6 +21,8 @@ class NotificationService {
 
   final FirebaseMessaging _messaging;
   final FlutterLocalNotificationsPlugin _localNotifications;
+  static final StreamController<Map<String, dynamic>> _openEvents =
+      StreamController<Map<String, dynamic>>.broadcast();
 
   static const AndroidNotificationChannel _channel = AndroidNotificationChannel(
     'noti_silent',
@@ -71,6 +73,10 @@ class NotificationService {
     if (payload == null || payload.isEmpty) return;
     try {
       final data = Map<String, dynamic>.from(jsonDecode(payload) as Map);
+      if (data['type'] == 'device_review') {
+        _openEvents.add(data);
+        return;
+      }
       if (data['type'] != 'song_delivery') return;
       final openSecondSong = response.actionId == 'open_second_song';
       final song = _songFromData(data, secondSong: openSecondSong);
@@ -82,6 +88,10 @@ class NotificationService {
   }
 
   void _handleMessageOpen(RemoteMessage message) {
+    final data = message.data;
+    if (data['type'] == 'device_review') {
+      _openEvents.add(Map<String, dynamic>.from(data));
+    }
     // The member app intentionally remains on the announcements feed when a
     // standard FCM notification is tapped. Song delivery actions use the
     // local notification buttons above to launch the selected file instead.
@@ -115,6 +125,11 @@ class NotificationService {
 
     if (data['type'] == 'song_delivery') {
       await _showSongDelivery(data);
+      return;
+    }
+
+    if (data['type'] == 'device_review') {
+      await _showDeviceReview(data);
       return;
     }
 
@@ -231,6 +246,31 @@ class NotificationService {
     );
   }
 
+  Future<void> _showDeviceReview(Map<String, dynamic> data) async {
+    final deviceId = data['deviceId']?.toString().trim() ?? '';
+    final title = data['title']?.toString().trim() ?? 'Device approval needed';
+    final message = data['message']?.toString().trim() ?? '';
+    if (deviceId.isEmpty || message.isEmpty) return;
+    await _localNotifications.show(
+      _notificationId('device_review_$deviceId'),
+      title,
+      message,
+      const NotificationDetails(
+        android: AndroidNotificationDetails(
+          'noti_silent',
+          'Noti Announcements',
+          channelDescription:
+              'Alerts for church announcements and music from Noti.',
+          importance: Importance.low,
+          priority: Priority.low,
+          playSound: false,
+          enableVibration: false,
+        ),
+      ),
+      payload: jsonEncode(data),
+    );
+  }
+
   Future<void> _showAnnouncement(Map<String, dynamic> data) async {
     final announcementId = data['announcementId'];
     final title = data['title']?.toString().trim() ?? '';
@@ -311,6 +351,8 @@ class NotificationService {
 
   Future<String?> getToken() => _messaging.getToken();
 
+  Stream<Map<String, dynamic>> get openedNotifications => _openEvents.stream;
+
   static String topicForOrganization(String organizationId) {
     final normalized = organizationId.trim().toLowerCase().replaceAll(
       RegExp(r'[^a-z0-9_.~-]+'),
@@ -319,12 +361,29 @@ class NotificationService {
     return 'org_${normalized.isEmpty ? 'unassigned' : normalized}';
   }
 
+  static String directorTopicForOrganization(String organizationId) {
+    return '${topicForOrganization(organizationId)}_directors';
+  }
+
   Future<void> syncOrganizationTopic(String? organizationId) async {
     // Remove the legacy broadcast topic so a device cannot receive another
     // organization's messages after it changes or leaves an organization.
     await _messaging.unsubscribeFromTopic('announcements');
     if (organizationId == null || organizationId.trim().isEmpty) return;
     await _messaging.subscribeToTopic(topicForOrganization(organizationId));
+  }
+
+  Future<void> syncDirectorTopic(
+    String? organizationId, {
+    required bool enabled,
+  }) async {
+    if (organizationId == null || organizationId.trim().isEmpty) return;
+    final topic = directorTopicForOrganization(organizationId);
+    if (enabled) {
+      await _messaging.subscribeToTopic(topic);
+      return;
+    }
+    await _messaging.unsubscribeFromTopic(topic);
   }
 
   Future<void> unsubscribeFromOrganizationTopic(String? organizationId) async {

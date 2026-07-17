@@ -32,27 +32,19 @@ class _AdminEntryScreenState extends State<AdminEntryScreen> {
     try {
       final auth = AuthService();
       final role = await auth.currentStaffRole();
-      var unlocked = await auth.authenticateDeviceCredential();
-      var recoveryCode = AuthService.directorFallbackCode;
-      if (!unlocked) {
-        final code = await _showRecoveryDialog();
-        if (code == null) return;
-        unlocked = code == AuthService.directorFallbackCode;
-        recoveryCode = code;
-      }
-      if (!unlocked) {
+      final deviceService = DeviceService();
+      final localDirectorAccess = await deviceService.staffAccessEnabled();
+
+      if (role != StaffRole.director && !localDirectorAccess) {
         if (!mounted) return;
         setState(() {
           _loading = false;
-          _error = 'Director access was not unlocked.';
+          _error = 'Director tools are not enabled on this device.';
         });
         return;
       }
-      if (role != StaffRole.director) {
-        await auth.claimDirectorAccess(fallbackCode: recoveryCode);
-      }
 
-      await DeviceService().enableStaffAccess();
+      await deviceService.enableStaffAccess();
       if (!mounted) return;
       Navigator.of(context).pushReplacement(
         MaterialPageRoute(builder: (_) => const AdminDashboardScreen()),
@@ -65,36 +57,6 @@ class _AdminEntryScreenState extends State<AdminEntryScreen> {
             'Director access could not be verified. Check your connection and try again.';
       });
     }
-  }
-
-  Future<String?> _showRecoveryDialog() {
-    return showDialog<String>(
-      context: context,
-      builder: (dialogContext) {
-        final controller = TextEditingController();
-        return AlertDialog(
-          title: const Text('Director access'),
-          content: TextField(
-            controller: controller,
-            autofocus: true,
-            obscureText: true,
-            keyboardType: TextInputType.number,
-            maxLength: 4,
-            decoration: const InputDecoration(labelText: 'Recovery passcode'),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(dialogContext).pop(),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.of(dialogContext).pop(controller.text),
-              child: const Text('Continue'),
-            ),
-          ],
-        );
-      },
-    );
   }
 
   @override
@@ -117,7 +79,7 @@ class _AdminEntryScreenState extends State<AdminEntryScreen> {
                 const SizedBox(height: 18),
                 Text(
                   _loading
-                      ? 'Confirming director access...'
+                      ? 'Opening director access...'
                       : (_error ?? 'Director access'),
                   textAlign: TextAlign.center,
                   style: Theme.of(context).textTheme.titleMedium,

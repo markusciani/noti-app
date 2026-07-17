@@ -15,6 +15,7 @@ import '../widgets/adaptive_page_body.dart';
 import 'announcement_detail_screen.dart';
 import '../services/music_directory_service.dart';
 import 'device_onboarding_screen.dart';
+import 'device_review_screen.dart';
 import 'music_folder_screen.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -33,10 +34,12 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _registeredDevice = false;
   bool _showStaffEntry = false;
   bool _directorRole = false;
+  bool _localDirectorBypass = false;
   bool _deviceApprovalResolved = false;
   bool _deviceApproved = false;
   bool _deviceDisabled = false;
   StreamSubscription? _deviceSubscription;
+  StreamSubscription<Map<String, dynamic>>? _notificationOpenSubscription;
   static const _directorPromptKey = 'noti_director_prompted';
   DateTime? _lastTitleTap;
   int _titleTapCount = 0;
@@ -46,6 +49,8 @@ class _HomeScreenState extends State<HomeScreen> {
     super.initState();
     _registerDevice();
     _watchDeviceApproval();
+    _notificationOpenSubscription = NotificationService().openedNotifications
+        .listen(_handleOpenedNotification);
   }
 
   Future<void> _registerDevice() async {
@@ -77,6 +82,11 @@ class _HomeScreenState extends State<HomeScreen> {
         setState(() {
           _showStaffEntry = showStaffEntry;
           _directorRole = directorRole;
+          _localDirectorBypass = showStaffEntry || directorRole;
+          if (_localDirectorBypass && !_deviceDisabled) {
+            _deviceApprovalResolved = true;
+            _deviceApproved = true;
+          }
         });
       }
     } catch (_) {
@@ -139,7 +149,14 @@ class _HomeScreenState extends State<HomeScreen> {
 
     await _deviceService.enableStaffAccess();
     await _syncNotifications();
-    if (mounted) setState(() => _showStaffEntry = true);
+    if (mounted) {
+      setState(() {
+        _showStaffEntry = true;
+        _localDirectorBypass = true;
+        _deviceApprovalResolved = true;
+        _deviceApproved = true;
+      });
+    }
     return true;
   }
 
@@ -297,23 +314,45 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _watchDeviceApproval() async {
+    final localStaffAccess = await _deviceService.staffAccessEnabled();
+    final localDirectorRole =
+        await AuthService().currentStaffRole() == StaffRole.director;
+    if (mounted &&
+        (localStaffAccess || localDirectorRole) &&
+        !_deviceDisabled) {
+      setState(() {
+        _showStaffEntry = localStaffAccess;
+        _directorRole = localDirectorRole;
+        _localDirectorBypass = true;
+        _deviceApprovalResolved = true;
+        _deviceApproved = true;
+      });
+    }
     await _deviceSubscription?.cancel();
     _deviceSubscription = _deviceService.watchCurrentDevice().listen((
       snapshot,
     ) {
       final data = snapshot.data();
+      final isDirectorTablet = data?['deviceType'] == 'director_tablet';
+      final staffAccessRequested =
+          data?['staffAccessRequested'] as bool? ?? false;
       final approved =
-          snapshot.exists &&
-          (data?['joinStatus'] as String? ?? 'approved') == 'approved' &&
+          (((data?['joinStatus'] as String? ?? 'approved') == 'approved') ||
+              isDirectorTablet ||
+              staffAccessRequested ||
+              _localDirectorBypass) &&
           data?['isDisabled'] != true;
       if (mounted) {
         setState(() {
-          _deviceApprovalResolved = snapshot.exists;
+          _deviceApprovalResolved = snapshot.exists || _localDirectorBypass;
           _deviceApproved = approved;
           _deviceDisabled = data?['isDisabled'] == true;
         });
       }
-      if (data?['joinStatus'] == 'approved') {
+      if ((data?['joinStatus'] == 'approved') ||
+          isDirectorTablet ||
+          staffAccessRequested ||
+          _localDirectorBypass) {
         unawaited(_syncNotifications());
       } else {
         unawaited(NotificationService().syncOrganizationTopic(null));
@@ -323,19 +362,36 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _syncNotifications() async {
     final organizationId = await _deviceService.approvedOrganizationId();
-    if (await _deviceService.staffAccessEnabled()) {
-      await NotificationService().unsubscribeFromOrganizationTopic(
-        organizationId,
-      );
-      return;
-    }
     await NotificationService().syncOrganizationTopic(organizationId);
+    final directorEnabled =
+        await _deviceService.staffAccessEnabled() || _directorRole;
+    await NotificationService().syncDirectorTopic(
+      organizationId,
+      enabled: directorEnabled,
+    );
+  }
+
+  void _handleOpenedNotification(Map<String, dynamic> data) {
+    if (!mounted) return;
+    final type = data['type']?.toString();
+    if (type != 'device_review') return;
+    final deviceId = data['deviceId']?.toString().trim() ?? '';
+    if (deviceId.isEmpty) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => DeviceReviewScreen(deviceId: deviceId),
+        ),
+      );
+    });
   }
 
   @override
   void dispose() {
     _searchController.dispose();
     _deviceSubscription?.cancel();
+    _notificationOpenSubscription?.cancel();
     super.dispose();
   }
 

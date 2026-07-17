@@ -119,22 +119,25 @@ class DeviceService {
     if (!snapshot.exists) return true;
     final data = snapshot.data() ?? const <String, dynamic>{};
     final organizationId = data['organizationId'] as String? ?? '';
-    final joinStatus = data['joinStatus'] as String? ?? 'approved';
-    return organizationId.isEmpty || joinStatus == 'rejected';
+    return organizationId.isEmpty;
   }
 
   Future<String?> approvedOrganizationId() async {
+    final prefs = await SharedPreferences.getInstance();
+    final localStaffAccess = prefs.getBool(_staffAccessKey) ?? false;
     final deviceId = await currentDeviceId();
-    if (deviceId == null || deviceId.isEmpty) return null;
+    if (deviceId == null || deviceId.isEmpty) {
+      return localStaffAccess ? Organization.defaultId : null;
+    }
     final snapshot = await _firestore
         .collection(_collection)
         .doc(deviceId)
         .get();
     final data = snapshot.data();
-    if (!snapshot.exists || data?['isDisabled'] == true) return null;
-    if ((data?['joinStatus'] as String? ?? 'approved') != 'approved') {
-      return null;
+    if (!snapshot.exists) {
+      return localStaffAccess ? Organization.defaultId : null;
     }
+    if (data?['isDisabled'] == true) return null;
     final organizationId = data?['organizationId'] as String?;
     return organizationId == null || organizationId.isEmpty
         ? Organization.defaultId
@@ -289,7 +292,10 @@ class DeviceService {
     final deviceId = await _getOrCreateDeviceId();
     final ownerUid = await _ensureDeviceOwner();
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_staffAccessKey, registration.staffAccessRequested);
+    final staffAccessRequested =
+        registration.staffAccessRequested ||
+        registration.deviceType == 'director_tablet';
+    await prefs.setBool(_staffAccessKey, staffAccessRequested);
     final platformData = await _collectPlatformData();
     final owner = _auth.currentUser;
     final deviceNumber = registration.deviceNumber.trim();
@@ -305,12 +311,6 @@ class DeviceService {
     final ref = _firestore.collection(_collection).doc(deviceId);
     final existing = await ref.get();
     final existingData = existing.data() ?? const <String, dynamic>{};
-    final existingStatus = existingData['joinStatus'] as String?;
-    // Director tablets are trusted for member-feed access immediately. Their
-    // protected tools still require device authentication and staff role checks.
-    final joinStatus = registration.deviceType == 'director_tablet'
-        ? 'approved'
-        : (existingStatus ?? 'pending');
     await ref.set({
       ...platformData,
       'id': deviceId,
@@ -321,14 +321,14 @@ class DeviceService {
       'isDisabled': false,
       'organizationId': registration.organizationId,
       'organizationName': registration.organizationName,
-      'joinStatus': joinStatus,
+      'joinStatus': 'approved',
       'deviceType': registration.deviceType,
       'displayName': displayName,
       'deviceName': displayName,
       'firstName': registration.firstName,
       'lastName': registration.lastName,
       'deviceNumber': deviceNumber,
-      'staffAccessRequested': registration.staffAccessRequested,
+      'staffAccessRequested': staffAccessRequested,
     }, SetOptions(merge: true));
   }
 
@@ -345,13 +345,12 @@ class DeviceService {
     final existing = await ref.get();
     final existingData = existing.data() ?? const <String, dynamic>{};
     final deviceNumber = (existingData['deviceNumber'] as String? ?? '').trim();
-    final isDirectorTablet = existingData['deviceType'] == 'director_tablet';
     await ref.set({
       ...platformData,
       'id': deviceId,
       'lastSeenAt': FieldValue.serverTimestamp(),
       if (deviceNumber.isNotEmpty) 'displayName': 'Maranatha $deviceNumber',
-      if (isDirectorTablet) 'joinStatus': 'approved',
+      'joinStatus': 'approved',
     }, SetOptions(merge: true));
   }
 
