@@ -49,3 +49,9 @@ app.*.map.json
 /android/key.properties
 /android/*.jks
 /android/*.keystore
+
+# Firebase Functions dependencies/build output
+/functions/node_modules/
+/functions/.firebase/
+/functions/lib/
+/functions/dist/

@@ -1,106 +1,157 @@
-# Noti Android Release Guide
+# Noti
 
-Noti is an Android church-announcement app backed by Firebase Authentication,
-Cloud Firestore, Cloud Messaging, and Cloud Functions.
+Noti is a Flutter app for church communication: announcements, director workflows, device registration, and push notifications.
 
-## Production prerequisites
+## Screenshots
 
-1. In the Firebase project `noti-android-1527`, enable Email/Password and
-   **Anonymous** Authentication providers. Anonymous Authentication gives
-   each member installation a private Firebase identity used to protect its
-   device record.
-2. Create each administrator in Firebase Authentication. After the person has
-   signed in once, create `users/<their Firebase UID>` in Firestore with:
+Current screenshot assets are in `/assets/images`. UI screenshots for docs are not yet checked in.
 
-   ```text
-   role: "admin"
-   enabled: true
-   email: "leader@example.org"
+## Supported operating systems
+
+- Android (primary production target)
+- iOS
+- macOS
+- Windows
+- Linux
+- Web
+
+## Backend providers
+
+Firebase remains the default backend and push transport baseline.
+
+| Provider | Status | Notes |
+| --- | --- | --- |
+| Firebase / Firestore | Fully supported | Default production path, existing Cloud Functions + FCM flow preserved. |
+| Supabase / PostgreSQL | Experimental | Secure HTTP adapter implemented; requires backend endpoints and policy setup. |
+| Convex | Experimental | Secure HTTP adapter implemented; requires server-side Convex actions/functions. |
+| PostgreSQL via secure API | Planned | Use `postgres_api` provider with your own secured API. |
+| MySQL via secure API | Planned | Use `mysql_api` provider with your own secured API. |
+| MongoDB via secure API | Planned | Use `mongodb_api` provider with your own secured API. |
+| Custom REST API | Experimental | Generic adapter available for documented announcement endpoints. |
+
+> Noti clients must never connect directly to privileged databases. Use provider auth + secured backend APIs.
+
+## Installation
+
+1. Clone the repository.
+2. Install Flutter dependencies:
+   ```bash
+   flutter pub get
+   ```
+3. (Optional) Install Firebase Functions dependencies:
+   ```bash
+   cd functions && npm install
    ```
 
-   The UID is shown in Firebase Authentication's Users list. Do this **before**
-   deploying the Firestore rules, otherwise that account cannot access admin
-   tools.
-3. Enable the Blaze billing plan before deploying the Gen 2 Cloud Function.
-   Firebase uses it to deliver announcement push notifications securely.
-4. In Google Cloud Console, restrict the Android Firebase API key to package
-   `org.ciani01.noti` and the release signing SHA-1/SHA-256 certificates.
-5. In Firebase Console, confirm Cloud Messaging API (V1) is enabled. The
-   deployed `sendTestPush` and `sendAnnouncementPush` functions use it for
-   topic broadcasts.
+## Configuration
 
-## Distribution checklist
+Copy `.env.example` values into your build pipeline or pass as `--dart-define` flags.
 
-Before installing the release on church devices or submitting it to Google
-Play, complete these checks:
-
-1. In Firebase Authentication, keep Email/Password and Anonymous providers
-   enabled. Create only the administrator accounts that should access Noti
-   Admin.
-2. Ensure every administrator has an enabled `users/<uid>` Firestore record
-   with `role: "admin"`. The Cloud Function checks this server-side before
-   sending notifications.
-3. Deploy the checked-in Firestore rules and Cloud Functions. The function
-   runtime account needs Firestore access and the Firebase Cloud Messaging API
-   Admin role; both are already configured for this Firebase project.
-4. Create a public privacy-policy page before Google Play submission. The app
-   collects a generated app device ID, device/app details, FCM token, and
-   recent activity time to provide device management and notifications.
-5. Build a signed App Bundle for Google Play. Use the signed APK only for
-   direct installation on managed devices.
-
-## Secure Firebase deployment
-
-Review the rules, then deploy them and the announcement push function:
+### Backend provider selection
 
 ```bash
-firebase deploy --only firestore:rules,functions --project noti-android-1527
+flutter run \
+  --dart-define=NOTI_BACKEND_PROVIDER=firebase
 ```
 
-The Functions send notifications to the `announcements` topic when an
-authorized administrator creates an announcement or sends a test broadcast.
-They also record delivery logs in `notification_logs`.
+Supported values: `firebase`, `supabase`, `convex`, `postgres_api`, `mysql_api`, `mongodb_api`, `custom_api`.
 
-## Production Android signing
+### Firebase setup (default)
 
-Do not use the debug signing key for a distributed app. Generate and back up a
-keystore once; losing it prevents future app updates.
+1. Configure Firebase for each platform (`lib/firebase_options.dart`).
+2. Enable Firebase Authentication providers used by your deployment.
+3. Deploy rules and functions:
+   ```bash
+   firebase deploy --only firestore:rules,functions
+   ```
+4. Keep FCM enabled for push delivery.
 
-```bash
-keytool -genkeypair -v \
-  -keystore android/noti-release.jks \
-  -alias noti-release \
-  -keyalg RSA -keysize 4096 -validity 10000
-```
+### Supabase setup
 
-Copy `android/key.properties.example` to `android/key.properties`, fill in the
-passwords you selected, and keep both the keystore and passwords outside source
-control. `key.properties` and `.jks` files are ignored. Back up the keystore
-and its passwords somewhere secure; they are required for every future update.
+Provide:
+- `NOTI_BACKEND_PROVIDER=supabase`
+- `NOTI_SUPABASE_URL`
+- `NOTI_SUPABASE_ANON_KEY`
+- Optional `NOTI_BACKEND_API_BASE_URL` if using a dedicated gateway.
 
-Build the Play Store bundle with symbol files:
+Implement secured announcement endpoints in Supabase Edge Functions and enforce organization permissions server-side.
 
-```bash
-flutter build appbundle --release --obfuscate --split-debug-info=build/symbols
-```
+### Convex setup
 
-The output is `build/app/outputs/bundle/release/app-release.aab`.
+Provide:
+- `NOTI_BACKEND_PROVIDER=convex`
+- `NOTI_CONVEX_URL`
 
-For managed tablets that install the app directly, build a signed APK:
+Expose secured HTTP actions/functions for announcements and enforce token verification/tenant isolation.
 
-```bash
-flutter build apk --release --obfuscate --split-debug-info=build/symbols
-```
+### Custom backend setup
 
-The output is `build/app/outputs/flutter-apk/app-release.apk`.
+Provide:
+- `NOTI_BACKEND_PROVIDER=custom_api` (or `postgres_api`, `mysql_api`, `mongodb_api`)
+- `NOTI_CUSTOM_API_URL` or `NOTI_BACKEND_API_BASE_URL`
+
+Expected announcement endpoints:
+- `GET /announcements?organizationId=...`
+- `POST /announcements`
+- `PATCH /announcements/{id}`
+- `DELETE /announcements/{id}`
+
+Use bearer-token auth and server-side authorization.
+
+## Authentication configuration
+
+- Firebase remains active in default mode.
+- Alternative providers must verify tokens on the server.
+- Never trust client-provided roles.
+- Tenant/org access must be enforced by backend policy/rules.
+
+## Push notification setup
+
+- FCM is retained as the default notification transport.
+- Database provider selection does **not** disable push delivery automatically.
+- For non-FCM platforms, implement a secure transport bridge in backend APIs and keep permission checks server-side.
 
 ## Local development
 
-Use the Android emulator or a connected Android device:
-
 ```bash
-flutter run -d emulator-5554
+flutter run
 ```
 
-The macOS target requires a complete Xcode installation. It is not needed to
-build the Android app.
+Recommended before PR:
+```bash
+flutter analyze
+flutter test
+```
+
+## Testing
+
+Current repository tests include theme tests and backend provider selection tests.
+
+Run all tests:
+```bash
+flutter test
+```
+
+## Troubleshooting
+
+- **No announcements with alternative provider**: verify backend URL and endpoint auth headers.
+- **Permission errors**: verify role mapping and org isolation policy in your backend.
+- **Push not arriving**: verify FCM token registration and topic subscriptions.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Security reporting
+
+See [SECURITY.md](SECURITY.md).
+
+## Open-source readiness documents
+
+- [docs/backend_architecture.md](docs/backend_architecture.md)
+- [docs/development_setup.md](docs/development_setup.md)
+- [docs/firebase_dependency_audit.md](docs/firebase_dependency_audit.md)
+- [docs/repository_audit.md](docs/repository_audit.md)
+- [LICENSE_PROPOSAL.md](LICENSE_PROPOSAL.md)
+- [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
+- [AGENTS.md](AGENTS.md)
