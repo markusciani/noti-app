@@ -1,39 +1,15 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import 'package:cloud_functions/cloud_functions.dart';
+import '../core/backend/backend_factory.dart';
+import '../core/backend/interfaces/notification_repository.dart';
 import '../models/announcement.dart';
 
 class FirestoreService {
-  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
-  final FirebaseFunctions _functions = FirebaseFunctions.instanceFor(
-    region: 'us-central1',
-  );
+  FirestoreService({NotificationRepository? repository})
+    : _repository = repository ?? BackendFactory.create().notificationRepository;
+
+  final NotificationRepository _repository;
 
   Stream<List<Announcement>> getAnnouncements({String? organizationId}) {
-    return _firestore
-        .collection('announcements')
-        .orderBy('createdAt', descending: true)
-        .snapshots()
-        .map((snapshot) {
-          final announcements = snapshot.docs
-              .map((doc) => Announcement.fromFirestore(doc))
-              .where(
-                (announcement) =>
-                    organizationId == null ||
-                    organizationId.isEmpty ||
-                    announcement.organizationId == organizationId ||
-                    (organizationId == 'maranatha-romanian-church' &&
-                        announcement.organizationId.isEmpty),
-              )
-              .toList();
-          announcements.sort((a, b) {
-            if (a.pinned != b.pinned) {
-              return a.pinned ? -1 : 1;
-            }
-            return b.createdAt.compareTo(a.createdAt);
-          });
-          return announcements;
-        });
+    return _repository.watchAnnouncements(organizationId: organizationId);
   }
 
   Future<void> addAnnouncement({
@@ -42,21 +18,14 @@ class FirestoreService {
     required String author,
     bool pinned = false,
     String? organizationId,
-  }) async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) {
-      throw StateError('A device identity is required.');
-    }
-
-    await FirebaseAuth.instance.currentUser!.getIdToken(true);
-    await _functions.httpsCallable('createAnnouncement').call({
-      'title': title,
-      'message': message,
-      'author': author,
-      'pinned': pinned,
-      if (organizationId != null && organizationId.isNotEmpty)
-        'organizationId': organizationId,
-    });
+  }) {
+    return _repository.createAnnouncement(
+      title: title,
+      message: message,
+      author: author,
+      pinned: pinned,
+      organizationId: organizationId,
+    );
   }
 
   Future<void> updateAnnouncement({
@@ -66,25 +35,18 @@ class FirestoreService {
     required String author,
     required bool pinned,
     String? organizationId,
-  }) async {
-    await FirebaseAuth.instance.currentUser!.getIdToken(true);
-    await _functions.httpsCallable('updateAnnouncement').call({
-      'announcementId': id,
-      'title': title,
-      'message': message,
-      'author': author,
-      'pinned': pinned,
-      if (organizationId != null && organizationId.isNotEmpty)
-        'organizationId': organizationId,
-    });
+  }) {
+    return _repository.updateAnnouncement(
+      id: id,
+      title: title,
+      message: message,
+      author: author,
+      pinned: pinned,
+      organizationId: organizationId,
+    );
   }
 
-  Future<void> deleteAnnouncement(String id, {String? organizationId}) async {
-    await FirebaseAuth.instance.currentUser!.getIdToken(true);
-    await _functions.httpsCallable('deleteAnnouncement').call({
-      'announcementId': id,
-      if (organizationId != null && organizationId.isNotEmpty)
-        'organizationId': organizationId,
-    });
+  Future<void> deleteAnnouncement(String id, {String? organizationId}) {
+    return _repository.deleteAnnouncement(id, organizationId: organizationId);
   }
 }

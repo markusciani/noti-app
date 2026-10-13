@@ -3,8 +3,8 @@
 ## Firebase
 
 - Email/Password and Anonymous Authentication are enabled.
-- Every administrator has an enabled Firestore `users/<uid>` record with
-  `role: "admin"`.
+- Every director has an enabled Firestore `users/<uid>` record with
+  `role: "director"`.
 - Firestore rules and both Cloud Functions are deployed to `noti-android-1527`.
 - The function runtime service account has Firestore access and Firebase Cloud
   Messaging API Admin access.
